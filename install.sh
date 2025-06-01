@@ -57,46 +57,59 @@ detect_system() {
     fi
 }
 
-# 配置YUM源
+# 配置YUM源（完全重写版）
 setup_repos() {
     if [ "$OS" = "centos" ]; then
-        log_step "配置YUM源..."
+        log_step "配置YUM源（彻底修复版）..."
         
+        # 完全清理现有配置
         mkdir -p /etc/yum.repos.d.backup
-        cp -r /etc/yum.repos.d/* /etc/yum.repos.d.backup/ 2>/dev/null || true
-        rm -rf /etc/yum.repos.d/*
+        mv /etc/yum.repos.d/* /etc/yum.repos.d.backup/ 2>/dev/null || true
         
-        tee /etc/yum.repos.d/CentOS-Base.repo > /dev/null << 'REPOEOF'
+        # 清理所有yum缓存
+        yum clean all
+        rm -rf /var/cache/yum/*
+        
+        # 创建最简单的CentOS源配置
+        tee /etc/yum.repos.d/CentOS-Base.repo > /dev/null << 'BASEEOF'
 [base]
-name=CentOS-$releasever - Base
-baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
-gpgcheck=0
+name=CentOS-7 - Base
+baseurl=http://mirror.centos.org/centos/7/os/x86_64/
 enabled=1
+gpgcheck=0
+priority=1
 
 [updates]
-name=CentOS-$releasever - Updates
-baseurl=http://vault.centos.org/centos/$releasever/updates/$basearch/
-gpgcheck=0
+name=CentOS-7 - Updates
+baseurl=http://mirror.centos.org/centos/7/updates/x86_64/
 enabled=1
+gpgcheck=0
+priority=1
 
 [extras]
-name=CentOS-$releasever - Extras
-baseurl=http://vault.centos.org/centos/$releasever/extras/$basearch/
-gpgcheck=0
+name=CentOS-7 - Extras
+baseurl=http://mirror.centos.org/centos/7/extras/x86_64/
 enabled=1
-REPOEOF
+gpgcheck=0
+priority=1
+BASEEOF
 
+        # 创建最简单的EPEL源配置
         tee /etc/yum.repos.d/epel.repo > /dev/null << 'EPELEOF'
 [epel]
-name=Extra Packages for Enterprise Linux 7 - $basearch
-baseurl=http://download.fedoraproject.org/pub/epel/7/$basearch
-failovermethod=priority
+name=Extra Packages for Enterprise Linux 7 - x86_64
+baseurl=http://download.fedoraproject.org/pub/epel/7/x86_64
 enabled=1
 gpgcheck=0
+priority=1
 EPELEOF
 
+        # 彻底清理并重建缓存
         yum clean all
-        yum makecache
+        rm -rf /var/cache/yum/*
+        yum makecache fast
+        
+        log_info "YUM源配置完成（无GPG验证）"
     fi
 }
 
