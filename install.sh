@@ -57,62 +57,78 @@ detect_system() {
     fi
 }
 
-# 配置YUM源（完全重写版）
-setup_repos() {
+setup_repos_and_dependencies() {
     if [ "$OS" = "centos" ]; then
-        log_step "配置YUM源（彻底修复版）..."
+        log_step "配置YUM源和安装依赖..."
         
-        # 完全清理现有配置
-        mkdir -p /etc/yum.repos.d.backup
-        mv /etc/yum.repos.d/* /etc/yum.repos.d.backup/ 2>/dev/null || true
-        
-        # 清理所有yum缓存
-        yum clean all
-        rm -rf /var/cache/yum/*
-        
-        # 创建最简单的CentOS源配置
-        tee /etc/yum.repos.d/CentOS-Base.repo > /dev/null << 'BASEEOF'
+        # 检查现有repo是否可用
+        if yum repolist enabled | grep -q "repolist: 0"; then
+            log_info "修复YUM源配置..."
+            
+            # 备份现有配置（如果存在）
+            mkdir -p /etc/yum.repos.d.backup
+            cp /etc/yum.repos.d/*.repo /etc/yum.repos.d.backup/ 2>/dev/null || true
+            
+            # 创建基础CentOS源
+            cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
 [base]
-name=CentOS-7 - Base
-baseurl=http://mirror.centos.org/centos/7/os/x86_64/
+name=CentOS-$releasever - Base
+mirrorlist=http://mirrorlist.centos.org/?release=$releasever&arch=$basearch&repo=os&infra=$infra
 enabled=1
 gpgcheck=0
 priority=1
 
 [updates]
-name=CentOS-7 - Updates
-baseurl=http://mirror.centos.org/centos/7/updates/x86_64/
+name=CentOS-$releasever - Updates
+mirrorlist=http://mirrorlist.centos.org/?release=$releasever&arch=$basearch&repo=updates&infra=$infra
 enabled=1
 gpgcheck=0
 priority=1
 
 [extras]
-name=CentOS-7 - Extras
-baseurl=http://mirror.centos.org/centos/7/extras/x86_64/
+name=CentOS-$releasever - Extras
+mirrorlist=http://mirrorlist.centos.org/?release=$releasever&arch=$basearch&repo=extras&infra=$infra
 enabled=1
 gpgcheck=0
 priority=1
-BASEEOF
+EOF
 
-        # 创建最简单的EPEL源配置
-        tee /etc/yum.repos.d/epel.repo > /dev/null << 'EPELEOF'
+            # 创建EPEL源
+            cat > /etc/yum.repos.d/epel.repo << 'EOF'
 [epel]
-name=Extra Packages for Enterprise Linux 7 - x86_64
-baseurl=http://download.fedoraproject.org/pub/epel/7/x86_64
+name=Extra Packages for Enterprise Linux 7 - $basearch
+mirrorlist=https://mirrors.fedoraproject.org/metalink?repo=epel-7&arch=$basearch
 enabled=1
 gpgcheck=0
 priority=1
-EPELEOF
+EOF
 
-        # 彻底清理并重建缓存
-        yum clean all
-        rm -rf /var/cache/yum/*
-        yum makecache fast
+            # 清理并重建缓存
+            yum clean all
+            yum makecache fast || yum makecache
+        fi
         
-        log_info "YUM源配置完成（无GPG验证）"
+        # 安装依赖软件
+        log_info "安装依赖软件..."
+        
+        # 分步安装，避免批量失败
+        packages=("curl" "wget" "unzip" "jq" "net-tools" "bind-utils")
+        for pkg in "${packages[@]}"; do
+            echo "安装 $pkg ..."
+            yum -y install $pkg || {
+                log_warn "$pkg 安装失败，尝试强制安装..."
+                yum -y install $pkg --nogpgcheck --skip-broken
+            }
+        done
+        
+    elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
+        log_step "更新软件源和安装依赖..."
+        apt-get update
+        apt-get -y install curl wget unzip jq net-tools dnsutils
     fi
+    
+    log_info "依赖软件配置完成"
 }
-
 # 安装依赖软件
 install_dependencies() {
     log_step "安装依赖软件..."
@@ -760,13 +776,12 @@ final_test() {
 
 # 主函数
 main() {
-    detect_system
-    setup_repos
-    install_dependencies
-    discover_game_ips  # 新增：自动发现IP
+   detect_system
+    setup_repos_and_dependencies  # 合并的函数
+    discover_game_ips
     install_xray
-    configure_xray     # 集成发现的IP
-    configure_dns_hosts # 新增：配置DNS和hosts
+    configure_xray
+    configure_dns_hosts
     configure_network
     configure_firewall
     create_management_scripts
