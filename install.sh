@@ -54,7 +54,7 @@ echo "c6eae20845cf8b6e02b8657f74c531b1" > ipdajian2.txt
 echo "安装依赖软件..."
 sudo yum clean all
 sudo yum makecache
-sudo yum -y install jq
+sudo yum -y install jq unzip  # 添加unzip到依赖软件列表
 
 # 配置SOCKS5服务
 echo "配置SOCKS5服务..."
@@ -67,20 +67,43 @@ else
     # 方法2: 使用xray作为SOCKS5代理
     echo "使用xray配置SOCKS5代理..."
     
-    # 下载xray
-    wget -O /usr/local/bin/xray https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+    # 修复: 正确下载并安装xray
+    echo "下载xray..."
+    wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+    
     if [ $? -ne 0 ]; then
+        echo "主下载地址失败，尝试备用地址..."
         # 备用下载地址
-        wget -O /tmp/xray.zip https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray
-        sudo mv /tmp/xray.zip /usr/local/bin/xray
+        wget -O xray.zip https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray
     fi
     
+    # 解压xray
+    echo "解压xray..."
+    unzip -o xray.zip
+    
+    # 检查解压是否成功
+    if [ ! -f "xray" ]; then
+        echo "错误: xray文件未找到，解压失败"
+        exit 1
+    fi
+    
+    # 移动到正确位置并设置权限
+    sudo mv xray /usr/local/bin/
     sudo chmod +x /usr/local/bin/xray
+    
+    # 验证xray文件
+    echo "验证xray安装..."
+    if ! /usr/local/bin/xray version >/dev/null 2>&1; then
+        echo "错误: xray安装验证失败"
+        exit 1
+    fi
+    
+    echo "xray安装成功"
     
     # 创建xray配置目录
     sudo mkdir -p /etc/xray
     
-    # 创建xray配置文件
+    # 创建xray配置文件 (修复: 添加listen参数和UDP支持)
     sudo tee /etc/xray/config.json > /dev/null << 'EOF'
 {
   "log": {
@@ -90,6 +113,7 @@ else
     {
       "port": 18889,
       "protocol": "socks",
+      "listen": "0.0.0.0",
       "settings": {
         "auth": "password",
         "accounts": [
@@ -105,7 +129,8 @@ else
             "user": "vip3",
             "pass": "123456"
           }
-        ]
+        ],
+        "udp": true
       }
     }
   ],
@@ -145,8 +170,9 @@ echo "配置防火墙..."
 sudo systemctl stop firewalld 2>/dev/null || true
 sudo systemctl disable firewalld 2>/dev/null || true
 
-# 开放端口
+# 开放端口 (修复: 同时开放TCP和UDP)
 sudo iptables -I INPUT -p tcp --dport 18889 -j ACCEPT
+sudo iptables -I INPUT -p udp --dport 18889 -j ACCEPT
 sudo iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
 
 # 启动服务
@@ -161,8 +187,21 @@ else
     echo "Xray SOCKS5代理已启动"
 fi
 
-# 获取服务器IP
-SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || hostname -I | awk '{print $1}')
+# 获取服务器IP (修复: 优先获取IPv4地址)
+SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 ipinfo.io/ip 2>/dev/null || ip route get 8.8.8.8 | awk '{print $7}' | head -1)
+
+# 验证服务是否正常启动
+echo "验证服务状态..."
+sleep 3
+if [ "$SOCKS_METHOD" = "xray" ]; then
+    if sudo netstat -tlnp | grep -q ":18889 "; then
+        echo "✓ SOCKS5代理服务正常运行"
+        SERVICE_STATUS="运行正常"
+    else
+        echo "✗ 警告: SOCKS5代理可能未正常启动"
+        SERVICE_STATUS="状态异常，请检查日志: sudo journalctl -u xray -f"
+    fi
+fi
 
 # 创建用户信息文件
 tee Sk5_User_Password.txt > /dev/null << EOF
@@ -172,12 +211,17 @@ SOCKS5代理信息:
 端口: 18889
 用户名: vip1, vip2, vip3
 密码: 123456
+服务状态: $SERVICE_STATUS
 
 服务管理命令:
 启动服务: sudo systemctl start $([ "$SOCKS_METHOD" = "dante" ] && echo "sockd" || echo "xray")
 停止服务: sudo systemctl stop $([ "$SOCKS_METHOD" = "dante" ] && echo "sockd" || echo "xray")  
 重启服务: sudo systemctl restart $([ "$SOCKS_METHOD" = "dante" ] && echo "sockd" || echo "xray")
 查看状态: sudo systemctl status $([ "$SOCKS_METHOD" = "dante" ] && echo "sockd" || echo "xray")
+查看日志: sudo journalctl -u $([ "$SOCKS_METHOD" = "dante" ] && echo "sockd" || echo "xray") -f
+
+测试连接:
+curl --socks5 vip1:123456@$SERVER_IP:18889 https://httpbin.org/ip
 #############################################################################
 EOF
 
