@@ -56,17 +56,35 @@ sudo yum clean all
 sudo yum makecache
 sudo yum -y install jq
 
-# 下载并执行主安装脚本
-echo "下载主安装脚本..."
-curl -sSL $BASE_URL/scripts/install2.sh -o install2.sh
-chmod +x install2.sh
+# 不下载原来的install2.sh，直接完成安装
+echo "配置SOCKS5服务..."
+sudo yum -y install dante-server
 
-echo "执行主安装脚本..."
-./install2.sh
+# 创建简单的SOCKS5配置
+sudo tee /etc/sockd.conf > /dev/null << 'EOF'
+internal: 0.0.0.0 port = 18889
+external: eth0
+socksmethod: username
+user.privileged: root
+user.notprivileged: nobody
+client pass {
+    from: 0.0.0.0/0 to: 0.0.0.0/0
+}
+socks pass {
+    from: 0.0.0.0/0 to: 0.0.0.0/0
+}
+EOF
 
-# 清理临时文件
-cd /
-rm -rf $TEMP_DIR
+# 创建用户
+sudo useradd -r -s /bin/false vip1 2>/dev/null || true
+echo "vip1:123456" | sudo chpasswd
 
-echo "安装完成！"
+# 启动服务
+sudo systemctl enable sockd
+sudo systemctl start sockd
 
+echo "SOCKS5安装完成！"
+echo "服务器IP: $(curl -s ifconfig.me)"
+echo "端口: 18889"
+echo "用户名: vip1"
+echo "密码: 123456"
