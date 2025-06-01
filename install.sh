@@ -66,27 +66,23 @@ setup_repos() {
         cp -r /etc/yum.repos.d/* /etc/yum.repos.d.backup/ 2>/dev/null || true
         rm -rf /etc/yum.repos.d/*
         
-        # 创建基础repo配置
         tee /etc/yum.repos.d/CentOS-Base.repo > /dev/null << 'REPOEOF'
 [base]
 name=CentOS-$releasever - Base
 baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+gpgcheck=0
 enabled=1
 
 [updates]
 name=CentOS-$releasever - Updates
 baseurl=http://vault.centos.org/centos/$releasever/updates/$basearch/
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+gpgcheck=0
 enabled=1
 
 [extras]
 name=CentOS-$releasever - Extras
 baseurl=http://vault.centos.org/centos/$releasever/extras/$basearch/
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+gpgcheck=0
 enabled=1
 REPOEOF
 
@@ -96,8 +92,7 @@ name=Extra Packages for Enterprise Linux 7 - $basearch
 baseurl=http://download.fedoraproject.org/pub/epel/7/$basearch
 failovermethod=priority
 enabled=1
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-7
+gpgcheck=0
 EPELEOF
 
         yum clean all
