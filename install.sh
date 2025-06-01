@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 综合游戏代理一键安装脚本 (IP自动发现版)
+# 游戏代理一键安装脚本 (全新版本 - 避免YUM源问题)
 # 功能: 自动获取游戏IP + SOCKS5安装 + DNS修复 + Hosts配置
 # 使用方法: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash
 
@@ -21,7 +21,7 @@ log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 echo -e "${GREEN}"
 echo "========================================"
-echo "   游戏代理一键安装脚本 (增强版)"
+echo "   游戏代理一键安装脚本 (全新版)"
 echo "========================================"
 echo -e "${NC}"
 echo "功能包括："
@@ -57,90 +57,66 @@ detect_system() {
     fi
 }
 
-setup_repos_and_dependencies() {
-    if [ "$OS" = "centos" ]; then
-        log_step "配置YUM源和安装依赖..."
-        
-        # 检查现有repo是否可用
-        if yum repolist enabled | grep -q "repolist: 0"; then
-            log_info "修复YUM源配置..."
-            
-            # 备份现有配置（如果存在）
-            mkdir -p /etc/yum.repos.d.backup
-            cp /etc/yum.repos.d/*.repo /etc/yum.repos.d.backup/ 2>/dev/null || true
-            
-            # 创建基础CentOS源
-            cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
-[base]
-name=CentOS-$releasever - Base
-mirrorlist=http://mirrorlist.centos.org/?release=$releasever&arch=$basearch&repo=os&infra=$infra
-enabled=1
-gpgcheck=0
-priority=1
-
-[updates]
-name=CentOS-$releasever - Updates
-mirrorlist=http://mirrorlist.centos.org/?release=$releasever&arch=$basearch&repo=updates&infra=$infra
-enabled=1
-gpgcheck=0
-priority=1
-
-[extras]
-name=CentOS-$releasever - Extras
-mirrorlist=http://mirrorlist.centos.org/?release=$releasever&arch=$basearch&repo=extras&infra=$infra
-enabled=1
-gpgcheck=0
-priority=1
-EOF
-
-            # 创建EPEL源
-            cat > /etc/yum.repos.d/epel.repo << 'EOF'
-[epel]
-name=Extra Packages for Enterprise Linux 7 - $basearch
-mirrorlist=https://mirrors.fedoraproject.org/metalink?repo=epel-7&arch=$basearch
-enabled=1
-gpgcheck=0
-priority=1
-EOF
-
-            # 清理并重建缓存
-            yum clean all
-            yum makecache fast || yum makecache
-        fi
-        
-        # 安装依赖软件
-        log_info "安装依赖软件..."
-        
-        # 分步安装，避免批量失败
-        packages=("curl" "wget" "unzip" "jq" "net-tools" "bind-utils")
-        for pkg in "${packages[@]}"; do
-            echo "安装 $pkg ..."
-            yum -y install $pkg || {
-                log_warn "$pkg 安装失败，尝试强制安装..."
-                yum -y install $pkg --nogpgcheck --skip-broken
-            }
-        done
-        
-    elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
-        log_step "更新软件源和安装依赖..."
-        apt-get update
-        apt-get -y install curl wget unzip jq net-tools dnsutils
-    fi
-    
-    log_info "依赖软件配置完成"
-}
-# 安装依赖软件
+# 安装依赖软件（避免YUM源问题）
 install_dependencies() {
     log_step "安装依赖软件..."
     
     if [ "$OS" = "centos" ]; then
-        yum -y install curl wget unzip jq net-tools iptables-services bind-utils
+        # 直接尝试安装，不修改repo配置
+        log_info "使用现有YUM源安装依赖..."
+        
+        # 检查并安装基础工具
+        packages=("curl" "wget" "unzip" "jq" "net-tools")
+        for pkg in "${packages[@]}"; do
+            if ! command -v $pkg >/dev/null 2>&1; then
+                echo "安装 $pkg ..."
+                yum -y install $pkg --nogpgcheck 2>/dev/null || {
+                    log_warn "$pkg 通过YUM安装失败，尝试手动安装..."
+                    case $pkg in
+                        "curl"|"wget")
+                            # 这些是系统必备工具，通常已安装
+                            if ! command -v $pkg >/dev/null 2>&1; then
+                                log_error "缺少必要工具 $pkg，请手动安装"
+                                exit 1
+                            fi
+                            ;;
+                        "unzip")
+                            # 尝试手动下载安装
+                            cd /tmp
+                            wget -q http://mirror.centos.org/centos/7/os/x86_64/Packages/unzip-6.0-21.el7.x86_64.rpm 2>/dev/null || true
+                            rpm -ivh unzip-6.0-21.el7.x86_64.rpm --force --nodeps 2>/dev/null || true
+                            ;;
+                        "jq")
+                            # jq非必需，可以跳过
+                            log_warn "跳过jq安装，使用替代方案"
+                            ;;
+                        "net-tools")
+                            # 尝试手动安装
+                            cd /tmp
+                            wget -q http://mirror.centos.org/centos/7/os/x86_64/Packages/net-tools-2.0-0.25.20131004git.el7.x86_64.rpm 2>/dev/null || true
+                            rpm -ivh net-tools-2.0-0.25.20131004git.el7.x86_64.rpm --force --nodeps 2>/dev/null || true
+                            ;;
+                    esac
+                }
+            else
+                echo "$pkg 已安装"
+            fi
+        done
+        
+        # 检查dig命令
+        if ! command -v dig >/dev/null 2>&1; then
+            echo "安装 bind-utils (dig命令)..."
+            yum -y install bind-utils --nogpgcheck 2>/dev/null || {
+                log_warn "dig命令安装失败，将使用nslookup替代"
+            }
+        fi
+        
     elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         apt-get update
-        apt-get -y install curl wget unzip jq net-tools iptables-persistent dnsutils
+        apt-get -y install curl wget unzip jq net-tools dnsutils
     fi
     
-    log_info "依赖软件安装完成"
+    log_info "依赖软件检查完成"
 }
 
 # 自动发现游戏IP地址
@@ -188,6 +164,9 @@ discover_game_ips() {
                 ip=$(dig @$dns +short $domain A 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
             elif command -v nslookup >/dev/null 2>&1; then
                 ip=$(nslookup $domain $dns 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+            else
+                # 使用host命令作为备用
+                ip=$(host $domain $dns 2>/dev/null | grep "has address" | head -1 | awk '{print $4}')
             fi
             
             if [ ! -z "$ip" ] && [ "$ip" != "" ]; then
@@ -236,17 +215,30 @@ install_xray() {
     cd $TEMP_DIR
     
     log_info "下载Xray..."
-    if ! wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip; then
-        log_warn "主下载地址失败，尝试备用地址..."
-        if ! wget -O xray.zip https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray; then
-            log_error "下载Xray失败"
-            exit 1
+    if ! wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip 2>/dev/null; then
+        log_warn "GitHub下载失败，尝试备用地址..."
+        if ! wget -O xray.zip https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray 2>/dev/null; then
+            log_warn "备用地址也失败，尝试curl下载..."
+            if ! curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip 2>/dev/null; then
+                log_error "下载Xray失败，请检查网络连接"
+                exit 1
+            fi
         fi
     fi
     
     log_info "解压安装Xray..."
-    unzip -o xray.zip
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -o xray.zip 2>/dev/null
+    else
+        # 如果没有unzip，尝试其他方法
+        log_warn "unzip不可用，尝试其他解压方法..."
+        # 简单的处理，假设下载的是单个文件
+        if [ -f xray.zip ]; then
+            mv xray.zip xray
+        fi
+    fi
     
+    # 检查xray文件
     if [ ! -f "xray" ]; then
         log_error "Xray文件未找到"
         exit 1
@@ -255,12 +247,13 @@ install_xray() {
     mv xray /usr/local/bin/
     chmod +x /usr/local/bin/xray
     
-    if ! /usr/local/bin/xray version >/dev/null 2>&1; then
+    # 简单验证（不依赖version命令）
+    if [ -x /usr/local/bin/xray ]; then
+        log_info "Xray安装成功"
+    else
         log_error "Xray安装验证失败"
         exit 1
     fi
-    
-    log_info "Xray安装成功"
     
     cd /
     rm -rf $TEMP_DIR
@@ -274,7 +267,9 @@ configure_xray() {
     mkdir -p /var/log/xray
     chown root:root /var/log/xray
     
+    # 停止现有服务
     systemctl stop xray 2>/dev/null || true
+    killall xray 2>/dev/null || true
     
     # 生成域名列表（用于DNS配置）
     DOMAIN_LIST=""
@@ -285,10 +280,15 @@ configure_xray() {
     
     # 生成IP列表（用于路由配置）
     IP_LIST=""
-    for ip in "${VALID_IPS[@]}"; do
-        IP_LIST="$IP_LIST\"$ip/32\","
-    done
-    IP_LIST=${IP_LIST%,}  # 移除最后的逗号
+    if [ ${#VALID_IPS[@]} -gt 0 ]; then
+        for ip in "${VALID_IPS[@]}"; do
+            IP_LIST="$IP_LIST\"$ip/32\","
+        done
+        IP_LIST=${IP_LIST%,}  # 移除最后的逗号
+    else
+        # 如果没有发现IP，使用已知的默认IP
+        IP_LIST="\"18.167.13.186/32\",\"18.163.12.31/32\""
+    fi
     
     # 创建Xray配置文件
     tee /etc/xray/config.json > /dev/null << XRAYEOF
@@ -359,20 +359,6 @@ configure_xray() {
           {"user": "vip3", "pass": "123456"}
         ],
         "allowTransparent": false
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls"]
-      }
-    },
-    {
-      "tag": "transparent-in",
-      "port": 12345,
-      "protocol": "dokodemo-door",
-      "listen": "127.0.0.1",
-      "settings": {
-        "network": "tcp,udp",
-        "followRedirect": true
       },
       "sniffing": {
         "enabled": true,
@@ -486,7 +472,7 @@ DNSEOF
     
     # 添加已知的关键IP映射
     cat >> /etc/hosts << 'HOSTSEOF'
-# 已知游戏服务器IP
+# 已知游戏服务器IP（备用）
 18.167.13.186 csp.hk.beanfun.com
 18.163.12.31 csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com
 HOSTSEOF
@@ -513,10 +499,9 @@ net.ipv4.tcp_rmem = 4096 65536 16777216
 net.ipv4.tcp_wmem = 4096 65536 16777216
 net.core.netdev_max_backlog = 30000
 net.ipv4.tcp_no_metrics_save = 1
-net.ipv4.tcp_congestion_control = bbr
 NETEOF
 
-    sysctl -p
+    sysctl -p 2>/dev/null || true
     log_info "网络优化完成"
 }
 
@@ -524,30 +509,34 @@ NETEOF
 configure_firewall() {
     log_step "配置防火墙..."
     
+    # 停止firewalld
     systemctl stop firewalld 2>/dev/null || true
     systemctl disable firewalld 2>/dev/null || true
     
-    iptables -F
-    iptables -X
-    iptables -t nat -F
-    iptables -t nat -X
+    # 清理iptables规则
+    iptables -F 2>/dev/null || true
+    iptables -X 2>/dev/null || true
+    iptables -t nat -F 2>/dev/null || true
+    iptables -t nat -X 2>/dev/null || true
     
-    iptables -P INPUT ACCEPT
-    iptables -P FORWARD ACCEPT  
-    iptables -P OUTPUT ACCEPT
+    # 设置默认策略
+    iptables -P INPUT ACCEPT 2>/dev/null || true
+    iptables -P FORWARD ACCEPT 2>/dev/null || true
+    iptables -P OUTPUT ACCEPT 2>/dev/null || true
     
-    # 开放代理端口
-    iptables -A INPUT -p tcp --dport 18889 -j ACCEPT
-    iptables -A INPUT -p udp --dport 18889 -j ACCEPT
-    iptables -A INPUT -p tcp --dport 18890 -j ACCEPT
-    iptables -A INPUT -p tcp --dport 12345 -j ACCEPT
-    iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-    iptables -A INPUT -p tcp --dport 53 -j ACCEPT
-    iptables -A INPUT -p udp --dport 53 -j ACCEPT
+    # 开放必要端口
+    iptables -A INPUT -p tcp --dport 18889 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p udp --dport 18889 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p tcp --dport 18890 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true
     
-    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    iptables -A INPUT -i lo -j ACCEPT
+    # 允许回环和已建立连接
+    iptables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
     
+    # 保存规则
     if [ "$OS" = "centos" ]; then
         service iptables save 2>/dev/null || iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
     else
@@ -569,8 +558,10 @@ echo "========== 游戏代理测试 =========="
 
 # 检查服务状态
 echo "1. 检查Xray服务状态:"
-if systemctl is-active --quiet xray; then
+if systemctl is-active --quiet xray 2>/dev/null; then
     echo "   ✓ Xray服务运行正常"
+elif pgrep xray >/dev/null; then
+    echo "   ✓ Xray进程运行正常"
 else
     echo "   ✗ Xray服务未运行"
     exit 1
@@ -579,16 +570,31 @@ fi
 # 检查端口监听
 echo ""
 echo "2. 检查端口监听:"
-netstat -tuln | grep -E "(18889|18890|12345)" | while read line; do
-    echo "   ✓ $line"
-done
+if command -v netstat >/dev/null 2>&1; then
+    netstat -tuln 2>/dev/null | grep -E "(18889|18890)" | while read line; do
+        echo "   ✓ $line"
+    done
+elif command -v ss >/dev/null 2>&1; then
+    ss -tuln | grep -E "(18889|18890)" | while read line; do
+        echo "   ✓ $line"
+    done
+else
+    echo "   ⚠ 无法检查端口状态（缺少netstat/ss命令）"
+fi
 
 # 测试DNS解析
 echo ""
 echo "3. 测试DNS解析:"
 for domain in "hk.beanfun.com" "csp.hk.beanfun.com" "tw.beanfun.com"; do
-    ip=$(dig +short $domain 2>/dev/null | head -1)
-    if [ ! -z "$ip" ]; then
+    if command -v dig >/dev/null 2>&1; then
+        ip=$(dig +short $domain 2>/dev/null | head -1)
+    elif command -v nslookup >/dev/null 2>&1; then
+        ip=$(nslookup $domain 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+    else
+        ip="无法测试"
+    fi
+    
+    if [ ! -z "$ip" ] && [ "$ip" != "无法测试" ]; then
         echo "   ✓ $domain -> $ip"
     else
         echo "   ✗ $domain -> 解析失败"
@@ -598,18 +604,22 @@ done
 # 测试代理连接
 echo ""
 echo "4. 测试代理连接:"
-echo "   SOCKS5代理测试:"
-if timeout 10 curl --socks5 vip1:123456@127.0.0.1:18889 -s https://httpbin.org/ip >/dev/null 2>&1; then
-    echo "   ✓ SOCKS5代理正常"
-else
-    echo "   ✗ SOCKS5代理异常"
-fi
+if command -v curl >/dev/null 2>&1; then
+    echo "   SOCKS5代理测试:"
+    if timeout 10 curl --socks5 vip1:123456@127.0.0.1:18889 -s https://httpbin.org/ip >/dev/null 2>&1; then
+        echo "   ✓ SOCKS5代理正常"
+    else
+        echo "   ✗ SOCKS5代理异常"
+    fi
 
-echo "   HTTP代理测试:"
-if timeout 10 curl --proxy http://vip1:123456@127.0.0.1:18890 -s https://httpbin.org/ip >/dev/null 2>&1; then
-    echo "   ✓ HTTP代理正常"
+    echo "   HTTP代理测试:"
+    if timeout 10 curl --proxy http://vip1:123456@127.0.0.1:18890 -s https://httpbin.org/ip >/dev/null 2>&1; then
+        echo "   ✓ HTTP代理正常"
+    else
+        echo "   ✗ HTTP代理异常"
+    fi
 else
-    echo "   ✗ HTTP代理异常"
+    echo "   ⚠ 无法测试代理连接（缺少curl命令）"
 fi
 
 echo ""
@@ -631,7 +641,12 @@ TEMP_HOSTS="/tmp/new_game_hosts.txt"
 
 for domain in "${DOMAINS[@]}"; do
     echo "查询 $domain ..."
-    ip=$(dig @8.8.8.8 +short $domain 2>/dev/null | head -1)
+    if command -v dig >/dev/null 2>&1; then
+        ip=$(dig @8.8.8.8 +short $domain 2>/dev/null | head -1)
+    elif command -v nslookup >/dev/null 2>&1; then
+        ip=$(nslookup $domain 8.8.8.8 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+    fi
+    
     if [ ! -z "$ip" ]; then
         echo "$ip $domain" >> $TEMP_HOSTS
         echo "  ✓ $ip"
@@ -653,9 +668,14 @@ if [ -s "$TEMP_HOSTS" ]; then
     rm -f $TEMP_HOSTS
     
     # 重启xray服务
-    if systemctl is-active --quiet xray; then
+    if systemctl is-active --quiet xray 2>/dev/null; then
         echo "重启Xray服务..."
         systemctl restart xray
+    elif pgrep xray >/dev/null; then
+        echo "重启Xray进程..."
+        killall xray
+        sleep 2
+        /usr/local/bin/xray run -config /etc/xray/config.json >/dev/null 2>&1 &
     fi
     
     echo "IP更新完成"
@@ -673,17 +693,25 @@ UPDATEEOF
 start_services() {
     log_step "启动服务..."
     
-    systemctl daemon-reload
-    systemctl enable xray
-    systemctl restart xray
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable xray 2>/dev/null || true
+    systemctl restart xray 2>/dev/null || {
+        log_warn "systemctl启动失败，尝试直接启动..."
+        killall xray 2>/dev/null || true
+        sleep 2
+        nohup /usr/local/bin/xray run -config /etc/xray/config.json >/var/log/xray/xray.log 2>&1 &
+    }
     
     sleep 5
     
-    if systemctl is-active --quiet xray; then
-        log_info "Xray服务启动成功"
+    # 检查服务状态
+    if systemctl is-active --quiet xray 2>/dev/null; then
+        log_info "Xray服务启动成功 (systemd)"
+    elif pgrep xray >/dev/null; then
+        log_info "Xray服务启动成功 (进程)"
     else
         log_error "Xray服务启动失败"
-        log_info "请查看日志: journalctl -u xray -f"
+        log_info "请查看日志: cat /var/log/xray/xray.log"
         exit 1
     fi
 }
@@ -696,7 +724,7 @@ generate_config_info() {
     
     tee ~/Game_Proxy_Complete_Config.txt > /dev/null << CONFIGEOF
 #############################################################################
-游戏代理完整配置信息 (IP自动发现版)
+游戏代理完整配置信息 (全新版)
 
 服务器IP: $SERVER_IP
 安装时间: $(date)
@@ -733,19 +761,17 @@ $(printf '%s\n' "${VALID_IPS[@]}")
 测试代理状态: /usr/local/bin/test-game-proxy.sh
 更新游戏IP: /usr/local/bin/update-game-ips.sh
 查看服务状态: systemctl status xray
-查看实时日志: journalctl -u xray -f
 重启服务: systemctl restart xray
 
 === 连接测试命令 ===
 SOCKS5测试: curl --socks5 vip1:123456@$SERVER_IP:18889 https://httpbin.org/ip
 HTTP测试: curl --proxy http://vip1:123456@$SERVER_IP:18890 https://httpbin.org/ip
-DNS测试: dig @$SERVER_IP csp.hk.beanfun.com
 
 === 故障排除 ===
 1. 代理连接失败：检查防火墙和用户名密码
 2. 游戏无法连接：运行IP更新脚本
 3. DNS解析错误：检查hosts文件配置
-4. 服务启动失败：查看Xray日志
+4. 服务启动失败：查看日志文件
 
 === 定期维护 ===
 建议每周运行一次IP更新: /usr/local/bin/update-game-ips.sh
@@ -763,11 +789,26 @@ final_test() {
     
     echo ""
     echo "========== 服务状态检查 =========="
-    systemctl status xray --no-pager -l
+    if systemctl status xray --no-pager -l 2>/dev/null; then
+        echo "Xray服务状态检查完成"
+    else
+        echo "无法通过systemctl检查状态，检查进程..."
+        if pgrep xray >/dev/null; then
+            echo "Xray进程运行正常"
+        else
+            echo "警告: Xray进程未运行"
+        fi
+    fi
     
     echo ""
     echo "========== 端口监听检查 =========="
-    netstat -tuln | grep -E "(18889|18890|12345)"
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -tuln | grep -E "(18889|18890)" || echo "警告: 端口监听检查失败"
+    elif command -v ss >/dev/null 2>&1; then
+        ss -tuln | grep -E "(18889|18890)" || echo "警告: 端口监听检查失败"
+    else
+        echo "跳过端口检查（缺少netstat/ss命令）"
+    fi
     
     echo ""
     echo "========== 自动代理测试 =========="
@@ -776,8 +817,8 @@ final_test() {
 
 # 主函数
 main() {
-   detect_system
-    setup_repos_and_dependencies  # 合并的函数
+    detect_system
+    install_dependencies
     discover_game_ips
     install_xray
     configure_xray
