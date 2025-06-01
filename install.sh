@@ -21,15 +21,17 @@ log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 echo -e "${GREEN}"
 echo "========================================"
-echo "   游戏代理一键安装脚本 (全新版)"
+echo "   游戏代理一键安装脚本 (修复增强版)"
 echo "========================================"
 echo -e "${NC}"
 echo "功能包括："
+echo "• 网络和DNS问题自动修复"
 echo "• 自动获取游戏官网所有IP地址"
 echo "• SOCKS5/HTTP代理安装配置"
 echo "• DNS污染自动修复"  
 echo "• 系统hosts文件自动配置"
 echo "• 网络优化和防火墙配置"
+echo "• 增强的错误诊断和修复"
 echo ""
 
 # 检查root权限
@@ -57,66 +59,88 @@ detect_system() {
     fi
 }
 
-# 安装依赖软件（避免YUM源问题）
+# 修复网络和DNS配置
+fix_network_dns() {
+    log_step "修复网络和DNS配置..."
+    
+    # 备份原始DNS配置
+    cp /etc/resolv.conf /etc/resolv.conf.bak.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+    
+    # 强制设置可用的DNS
+    tee /etc/resolv.conf > /dev/null << 'FIXDNS'
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+nameserver 223.5.5.5
+options timeout:3
+options attempts:2
+FIXDNS
+    
+    # 测试网络连接
+    log_info "测试网络连接..."
+    if ping -c 2 -W 3 8.8.8.8 >/dev/null 2>&1; then
+        log_info "网络连接正常"
+    else
+        log_warn "网络连接可能有问题，继续尝试..."
+    fi
+    
+    # 测试DNS解析
+    log_info "测试DNS解析..."
+    if nslookup google.com 8.8.8.8 >/dev/null 2>&1; then
+        log_info "DNS解析正常"
+    else
+        log_warn "DNS解析可能有问题，继续尝试..."
+    fi
+}
+
+# 安装依赖软件（增强版）
 install_dependencies() {
     log_step "安装依赖软件..."
     
     if [ "$OS" = "centos" ]; then
-        # 直接尝试安装，不修改repo配置
-        log_info "使用现有YUM源安装依赖..."
+        log_info "安装必要的依赖软件..."
         
-        # 检查并安装基础工具
-        packages=("curl" "wget" "unzip" "jq" "net-tools")
-        for pkg in "${packages[@]}"; do
-            if ! command -v $pkg >/dev/null 2>&1; then
-                echo "安装 $pkg ..."
-                yum -y install $pkg --nogpgcheck 2>/dev/null || {
-                    log_warn "$pkg 通过YUM安装失败，尝试手动安装..."
-                    case $pkg in
-                        "curl"|"wget")
-                            # 这些是系统必备工具，通常已安装
-                            if ! command -v $pkg >/dev/null 2>&1; then
-                                log_error "缺少必要工具 $pkg，请手动安装"
-                                exit 1
-                            fi
-                            ;;
-                        "unzip")
-                            # 尝试手动下载安装
-                            cd /tmp
-                            wget -q http://mirror.centos.org/centos/7/os/x86_64/Packages/unzip-6.0-21.el7.x86_64.rpm 2>/dev/null || true
-                            rpm -ivh unzip-6.0-21.el7.x86_64.rpm --force --nodeps 2>/dev/null || true
-                            ;;
-                        "jq")
-                            # jq非必需，可以跳过
-                            log_warn "跳过jq安装，使用替代方案"
-                            ;;
-                        "net-tools")
-                            # 尝试手动安装
-                            cd /tmp
-                            wget -q http://mirror.centos.org/centos/7/os/x86_64/Packages/net-tools-2.0-0.25.20131004git.el7.x86_64.rpm 2>/dev/null || true
-                            rpm -ivh net-tools-2.0-0.25.20131004git.el7.x86_64.rpm --force --nodeps 2>/dev/null || true
-                            ;;
-                    esac
-                }
-            else
-                echo "$pkg 已安装"
-            fi
-        done
-        
-        # 检查dig命令
-        if ! command -v dig >/dev/null 2>&1; then
-            echo "安装 bind-utils (dig命令)..."
-            yum -y install bind-utils --nogpgcheck 2>/dev/null || {
-                log_warn "dig命令安装失败，将使用nslookup替代"
+        # 强制安装unzip（多种方法）
+        if ! command -v unzip >/dev/null 2>&1; then
+            echo "安装 unzip ..."
+            yum -y install unzip --nogpgcheck 2>/dev/null || {
+                log_warn "YUM安装unzip失败，尝试直接下载..."
+                cd /tmp
+                # 尝试多个镜像源
+                for mirror in "http://mirror.centos.org" "http://vault.centos.org" "https://dl.rockylinux.org/vault"; do
+                    if wget -q $mirror/centos/7/os/x86_64/Packages/unzip-6.0-21.el7.x86_64.rpm 2>/dev/null; then
+                        rpm -ivh unzip-6.0-21.el7.x86_64.rpm --force --nodeps 2>/dev/null && break
+                    fi
+                done
             }
         fi
+        
+        # 验证unzip安装
+        if command -v unzip >/dev/null 2>&1; then
+            echo "✓ unzip 安装成功"
+        else
+            log_warn "unzip 安装失败，将使用替代解压方法"
+        fi
+        
+        # 安装其他工具（可选）
+        for pkg in jq net-tools bind-utils; do
+            if ! command -v $pkg >/dev/null 2>&1; then
+                echo "尝试安装 $pkg ..."
+                yum -y install $pkg --nogpgcheck 2>/dev/null || {
+                    case $pkg in
+                        "jq") log_warn "跳过jq安装" ;;
+                        "net-tools") log_warn "跳过net-tools安装" ;;
+                        "bind-utils") log_warn "跳过bind-utils安装，将使用nslookup" ;;
+                    esac
+                }
+            fi
+        done
         
     elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         apt-get update
         apt-get -y install curl wget unzip jq net-tools dnsutils
     fi
     
-    log_info "依赖软件检查完成"
+    log_info "依赖软件配置完成"
 }
 
 # 自动发现游戏IP地址
@@ -207,7 +231,7 @@ discover_game_ips() {
     VALID_IPS=($(printf '%s\n' "${valid_ips[@]}" | sort))
 }
 
-# 安装Xray
+# 安装Xray（增强版）
 install_xray() {
     log_step "安装Xray代理服务器..."
     
@@ -215,43 +239,98 @@ install_xray() {
     cd $TEMP_DIR
     
     log_info "下载Xray..."
-    if ! wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip 2>/dev/null; then
-        log_warn "GitHub下载失败，尝试备用地址..."
-        if ! wget -O xray.zip https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray 2>/dev/null; then
-            log_warn "备用地址也失败，尝试curl下载..."
-            if ! curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip 2>/dev/null; then
-                log_error "下载Xray失败，请检查网络连接"
-                exit 1
-            fi
+    
+    # 多种下载方法和多个版本
+    download_success=false
+    
+    # 方法1: wget下载最新版
+    if ! $download_success && command -v wget >/dev/null 2>&1; then
+        log_info "尝试wget下载最新版..."
+        if wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip 2>/dev/null; then
+            download_success=true
+            log_info "wget下载成功"
         fi
     fi
     
+    # 方法2: curl下载最新版
+    if ! $download_success && command -v curl >/dev/null 2>&1; then
+        log_info "尝试curl下载最新版..."
+        if curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip 2>/dev/null; then
+            download_success=true
+            log_info "curl下载成功"
+        fi
+    fi
+    
+    # 方法3: 下载指定版本
+    if ! $download_success; then
+        log_warn "最新版下载失败，尝试下载稳定版本..."
+        versions=("v1.8.6" "v1.8.5" "v1.8.4")
+        for version in "${versions[@]}"; do
+            if wget -O xray.zip https://github.com/XTLS/Xray-core/releases/download/$version/Xray-linux-64.zip 2>/dev/null; then
+                download_success=true
+                log_info "下载版本 $version 成功"
+                break
+            fi
+        done
+    fi
+    
+    # 方法4: 备用下载地址
+    if ! $download_success; then
+        log_warn "GitHub下载失败，尝试备用地址..."
+        if wget -O xray https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray 2>/dev/null; then
+            download_success=true
+            log_info "备用地址下载成功"
+        fi
+    fi
+    
+    if ! $download_success; then
+        log_error "所有下载方法都失败了"
+        exit 1
+    fi
+    
     log_info "解压安装Xray..."
-    if command -v unzip >/dev/null 2>&1; then
-        unzip -o xray.zip 2>/dev/null
-    else
-        # 如果没有unzip，尝试其他方法
-        log_warn "unzip不可用，尝试其他解压方法..."
-        # 简单的处理，假设下载的是单个文件
-        if [ -f xray.zip ]; then
-            mv xray.zip xray
+    
+    # 如果下载的是zip文件，需要解压
+    if [ -f "xray.zip" ]; then
+        if command -v unzip >/dev/null 2>&1; then
+            if unzip -o xray.zip 2>/dev/null; then
+                log_info "unzip解压成功"
+            else
+                log_warn "unzip解压失败，尝试其他方法..."
+                # 如果解压失败，尝试重命名（可能下载的就是二进制文件）
+                mv xray.zip xray 2>/dev/null || true
+            fi
+        else
+            log_warn "unzip不可用，尝试将zip文件直接作为二进制文件..."
+            mv xray.zip xray 2>/dev/null || true
         fi
     fi
     
     # 检查xray文件
     if [ ! -f "xray" ]; then
-        log_error "Xray文件未找到"
+        log_error "Xray文件未找到，列出目录内容："
+        ls -la
         exit 1
     fi
     
-    mv xray /usr/local/bin/
+    # 检查文件类型
+    file_type=$(file xray 2>/dev/null || echo "unknown")
+    log_info "Xray文件类型: $file_type"
+    
+    # 安装xray
+    cp xray /usr/local/bin/
     chmod +x /usr/local/bin/xray
     
-    # 简单验证（不依赖version命令）
+    # 验证安装
     if [ -x /usr/local/bin/xray ]; then
-        log_info "Xray安装成功"
+        # 尝试运行version命令验证
+        if /usr/local/bin/xray version >/dev/null 2>&1; then
+            log_info "Xray安装和验证成功"
+        else
+            log_warn "Xray安装成功但version验证失败，可能是版本兼容问题"
+        fi
     else
-        log_error "Xray安装验证失败"
+        log_error "Xray安装失败"
         exit 1
     fi
     
@@ -689,30 +768,125 @@ UPDATEEOF
     log_info "管理脚本创建完成"
 }
 
-# 启动服务
+# 启动服务（增强版）
 start_services() {
     log_step "启动服务..."
     
+    # 确保日志目录存在
+    mkdir -p /var/log/xray
+    
+    # 验证配置文件
+    log_info "验证Xray配置文件..."
+    if [ ! -f /etc/xray/config.json ]; then
+        log_error "配置文件不存在: /etc/xray/config.json"
+        exit 1
+    fi
+    
+    # 测试配置文件语法
+    if /usr/local/bin/xray run -test -config /etc/xray/config.json 2>/dev/null; then
+        log_info "配置文件语法正确"
+    else
+        log_warn "配置文件可能有语法问题，继续尝试启动..."
+    fi
+    
+    # 清理现有进程
+    log_info "清理现有Xray进程..."
+    systemctl stop xray 2>/dev/null || true
+    killall xray 2>/dev/null || true
+    sleep 3
+    
+    # 重新加载systemd
     systemctl daemon-reload 2>/dev/null || true
     systemctl enable xray 2>/dev/null || true
-    systemctl restart xray 2>/dev/null || {
-        log_warn "systemctl启动失败，尝试直接启动..."
-        killall xray 2>/dev/null || true
-        sleep 2
-        nohup /usr/local/bin/xray run -config /etc/xray/config.json >/var/log/xray/xray.log 2>&1 &
-    }
     
-    sleep 5
-    
-    # 检查服务状态
-    if systemctl is-active --quiet xray 2>/dev/null; then
-        log_info "Xray服务启动成功 (systemd)"
-    elif pgrep xray >/dev/null; then
-        log_info "Xray服务启动成功 (进程)"
+    # 尝试启动服务
+    log_info "启动Xray服务..."
+    if systemctl start xray 2>/dev/null; then
+        log_info "systemctl启动成功"
     else
-        log_error "Xray服务启动失败"
-        log_info "请查看日志: cat /var/log/xray/xray.log"
+        log_warn "systemctl启动失败，尝试手动启动..."
+        
+        # 手动启动并记录详细日志
+        nohup /usr/local/bin/xray run -config /etc/xray/config.json > /var/log/xray/xray.log 2>&1 &
+        
+        # 等待启动
+        sleep 5
+        
+        if pgrep xray >/dev/null; then
+            log_info "手动启动成功"
+        else
+            log_error "手动启动也失败了"
+            
+            # 显示详细错误信息
+            echo "========== Xray启动日志 =========="
+            cat /var/log/xray/xray.log 2>/dev/null || echo "日志文件不存在"
+            
+            echo "========== 配置文件检查 =========="
+            echo "配置文件大小: $(wc -c < /etc/xray/config.json) 字节"
+            echo "配置文件前几行:"
+            head -10 /etc/xray/config.json
+            
+            echo "========== Xray二进制文件检查 =========="
+            ls -la /usr/local/bin/xray
+            file /usr/local/bin/xray
+            
+            # 尝试直接运行xray看错误
+            echo "========== 直接运行测试 =========="
+            timeout 10 /usr/local/bin/xray run -config /etc/xray/config.json || true
+            
+            exit 1
+        fi
+    fi
+    
+    # 等待服务完全启动
+    sleep 8
+    
+    # 验证服务状态
+    log_info "验证服务状态..."
+    service_running=false
+    
+    if systemctl is-active --quiet xray 2>/dev/null; then
+        log_info "✓ Xray服务运行正常 (systemd)"
+        service_running=true
+    elif pgrep xray >/dev/null; then
+        log_info "✓ Xray进程运行正常 (手动启动)"
+        service_running=true
+    fi
+    
+    if ! $service_running; then
+        log_error "Xray服务验证失败"
+        
+        # 显示诊断信息
+        echo "========== 服务诊断信息 =========="
+        echo "systemctl状态:"
+        systemctl status xray --no-pager -l 2>/dev/null || echo "systemctl不可用"
+        
+        echo "进程信息:"
+        ps aux | grep xray | grep -v grep || echo "未找到xray进程"
+        
+        echo "端口监听:"
+        netstat -tuln | grep -E "(18889|18890)" 2>/dev/null || ss -tuln | grep -E "(18889|18890)" 2>/dev/null || echo "无法检查端口"
+        
+        echo "日志内容:"
+        tail -20 /var/log/xray/xray.log 2>/dev/null || echo "无日志文件"
+        
         exit 1
+    fi
+    
+    # 验证端口监听
+    log_info "验证端口监听..."
+    sleep 3
+    
+    if netstat -tuln 2>/dev/null | grep -q ":18889" || ss -tuln 2>/dev/null | grep -q ":18889"; then
+        log_info "✓ SOCKS5端口18889监听正常"
+    else
+        log_warn "⚠ SOCKS5端口18889可能未正常监听"
+    fi
+    
+    if netstat -tuln 2>/dev/null | grep -q ":18890" || ss -tuln 2>/dev/null | grep -q ":18890"; then
+        log_info "✓ HTTP端口18890监听正常"
+    else
+        log_warn "⚠ HTTP端口18890可能未正常监听"
     fi
 }
 
@@ -818,6 +992,7 @@ final_test() {
 # 主函数
 main() {
     detect_system
+    fix_network_dns      # 新增：首先修复网络和DNS
     install_dependencies
     discover_game_ips
     install_xray
@@ -853,6 +1028,17 @@ main() {
     echo ""
     echo -e "${GREEN}现在可以在游戏客户端中配置SOCKS5代理了！${NC}"
     echo -e "${GREEN}推荐使用SOCKS5代理，支持UDP和自动DNS解析${NC}"
+    
+    # 最终连接测试
+    log_step "执行最终连接测试..."
+    if command -v curl >/dev/null 2>&1; then
+        echo "测试SOCKS5代理连接..."
+        if curl --socks5 vip1:123456@127.0.0.1:18889 --connect-timeout 10 -s https://httpbin.org/ip >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ SOCKS5代理测试成功！代理工作正常${NC}"
+        else
+            echo -e "${YELLOW}⚠ SOCKS5代理测试失败，但服务已启动，请检查防火墙设置${NC}"
+        fi
+    fi
 }
 
 # 执行主函数
