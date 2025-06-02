@@ -14,44 +14,52 @@ set -e
 # 2. 命令行参数: bash install.sh 1080
 # 3. 交互式输入
 
-# 检查命令行参数
-if [ -n "$1" ]; then
+# ====== 端口配置逻辑修复 ======
+# 首先检查环境变量
+if [ -n "$SOCKS5_PORT" ]; then
+    echo "检测到环境变量端口: $SOCKS5_PORT"
+# 然后检查命令行参数
+elif [ -n "$1" ]; then
     SOCKS5_PORT="$1"
-elif [ -n "$SOCKS5_PORT" ]; then
-    # 使用环境变量
-    SOCKS5_PORT="$SOCKS5_PORT"
+    echo "检测到命令行参数端口: $SOCKS5_PORT"
 else
-    # 交互式询问用户
-    echo "请选择SOCKS5端口配置："
-    echo "1. 使用默认端口 18889"
-    echo "2. 使用常用端口 1080"
-    echo "3. 使用常用端口 3128"
-    echo "4. 自定义端口"
-    echo ""
-    read -p "请选择 (1-4) [默认:1]: " port_choice
-    
-    case $port_choice in
-        2)
-            SOCKS5_PORT=1080
-            ;;
-        3)
-            SOCKS5_PORT=3128
-            ;;
-        4)
-            while true; do
-                read -p "请输入自定义端口 (1024-65535): " custom_port
-                if [[ "$custom_port" =~ ^[0-9]+$ ]] && [ "$custom_port" -ge 1024 ] && [ "$custom_port" -le 65535 ]; then
-                    SOCKS5_PORT=$custom_port
-                    break
-                else
-                    echo "错误: 请输入有效的端口号 (1024-65535)"
-                fi
-            done
-            ;;
-        *)
-            SOCKS5_PORT=18889
-            ;;
-    esac
+    # 如果通过管道执行且没有环境变量，使用默认端口
+    if [ ! -t 0 ]; then
+        echo "检测到管道执行，使用默认端口"
+        SOCKS5_PORT=18889
+    else
+        # 交互式询问用户（仅在终端直接执行时）
+        echo "请选择SOCKS5端口配置："
+        echo "1. 使用默认端口 18889"
+        echo "2. 使用常用端口 1080"
+        echo "3. 使用常用端口 3128"
+        echo "4. 自定义端口"
+        echo ""
+        read -p "请选择 (1-4) [默认:1]: " port_choice
+        
+        case $port_choice in
+            2)
+                SOCKS5_PORT=1080
+                ;;
+            3)
+                SOCKS5_PORT=3128
+                ;;
+            4)
+                while true; do
+                    read -p "请输入自定义端口 (1024-65535): " custom_port
+                    if [[ "$custom_port" =~ ^[0-9]+$ ]] && [ "$custom_port" -ge 1024 ] && [ "$custom_port" -le 65535 ]; then
+                        SOCKS5_PORT=$custom_port
+                        break
+                    else
+                        echo "错误: 请输入有效的端口号 (1024-65535)"
+                    fi
+                done
+                ;;
+            *)
+                SOCKS5_PORT=18889
+                ;;
+        esac
+    fi
 fi
 
 # 验证端口号
