@@ -51,7 +51,7 @@ else
 fi
 
 # 验证端口号
-if ! [[ "$SOCKS5_PORT" =~ ^[0-9]+$ ]] || [ "$SOCKS5_PORT" -lt 1024 ] || [ "$SOCKS5_PORT" -le 65535 ]; then
+if ! [[ "$SOCKS5_PORT" =~ ^[0-9]+$ ]] || [ "$SOCKS5_PORT" -lt 1024 ] || [ "$SOCKS5_PORT" -gt 65535 ]; then
     echo "❌ 错误: 无效的端口号 '$SOCKS5_PORT'"
     echo "🔧 解决方案:"
     echo "   curl -sSL https://... | bash -s 1080"
