@@ -212,6 +212,7 @@ sudo tee -a /etc/hosts > /dev/null << 'HOSTSCONFIG'
 18.163.12.31 csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com
 202.80.107.11 tw.beanfun.com
 52.147.74.109 beanfun.com
+31.13.106.4 bfweb.hk.beanfun.com
 HOSTSCONFIG
 
 echo "✅ DNS优化配置完成"
@@ -383,7 +384,8 @@ sudo tee /etc/xray/config.json > /dev/null << XRAYCONFIG
           "hk.beanfun.com",
           "csp.hk.beanfun.com",
           "tw.beanfun.com",
-          "csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com"
+          "csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com",
+          "bfweb.hk.beanfun.com"
         ],
         "outboundTag": "direct"
       },
@@ -394,7 +396,8 @@ sudo tee /etc/xray/config.json > /dev/null << XRAYCONFIG
           "18.167.13.186/32",
           "18.163.12.31/32",
           "202.80.107.11/32",
-          "52.147.74.109/32"
+          "52.147.74.109/32",
+          "31.13.106.4/32"
         ],
         "outboundTag": "direct"
       },
