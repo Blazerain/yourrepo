@@ -1,22 +1,54 @@
 #!/bin/bash
 
-# 游戏代理UDP修复脚本
-# 解决UDP转发失败和游戏登录器连接问题
+# DNS修复和代理优化脚本
+# 解决beanfun游戏登录器DNS污染问题
 
-echo "开始修复UDP转发和游戏代理问题..."
+echo "开始修复DNS污染和代理配置问题..."
 
 # 1. 停止xray服务
 echo "停止xray服务..."
 sudo systemctl stop xray
 
-# 2. 创建完整的xray配置，重点修复UDP问题
-echo "更新xray配置文件..."
-sudo tee /etc/xray/config.json > /dev/null << 'EOF'
+# 2. 备份现有配置
+echo "备份现有配置..."
+sudo cp /etc/xray/config.json /etc/xray/config.json.bak.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+
+# 3. 创建增强版xray配置，解决DNS问题
+echo "创建增强版xray配置..."
+sudo tee /etc/xray/config.json > /dev/null << 'XRAYCONFIG'
 {
   "log": {
     "loglevel": "info",
     "access": "/var/log/xray/access.log",
     "error": "/var/log/xray/error.log"
+  },
+  "dns": {
+    "servers": [
+      {
+        "address": "8.8.8.8",
+        "port": 53,
+        "domains": [
+          "domain:beanfun.com",
+          "domain:gamania.com",
+          "domain:gnjoy.com"
+        ]
+      },
+      {
+        "address": "1.1.1.1",
+        "port": 53,
+        "domains": [
+          "domain:amazonaws.com",
+          "domain:elasticbeanstalk.com"
+        ]
+      },
+      {
+        "address": "223.5.5.5",
+        "port": 53
+      },
+      "localhost"
+    ],
+    "clientIp": "1.2.3.4",
+    "tag": "dns-inbound"
   },
   "inbounds": [
     {
@@ -36,7 +68,10 @@ sudo tee /etc/xray/config.json > /dev/null << 'EOF'
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls"]
+        "destOverride": ["http", "tls", "quic"],
+        "domainsExcluded": [
+          "courier.push.apple.com"
+        ]
       }
     },
     {
@@ -51,6 +86,10 @@ sudo tee /etc/xray/config.json > /dev/null << 'EOF'
           {"user": "vip3", "pass": "123456"}
         ],
         "allowTransparent": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
       }
     },
     {
@@ -73,7 +112,8 @@ sudo tee /etc/xray/config.json > /dev/null << 'EOF'
       "tag": "direct",
       "protocol": "freedom",
       "settings": {
-        "domainStrategy": "UseIPv4"
+        "domainStrategy": "UseIPv4",
+        "userLevel": 0
       }
     },
     {
@@ -91,6 +131,25 @@ sudo tee /etc/xray/config.json > /dev/null << 'EOF'
     "rules": [
       {
         "type": "field",
+        "domain": [
+          "domain:beanfun.com",
+          "domain:gamania.com", 
+          "domain:gnjoy.com",
+          "csp.hk.beanfun.com",
+          "csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "18.167.13.186/32",
+          "18.163.12.31/32"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
         "ip": [
           "127.0.0.0/8",
           "10.0.0.0/8",
@@ -102,23 +161,42 @@ sudo tee /etc/xray/config.json > /dev/null << 'EOF'
     ]
   }
 }
-EOF
+XRAYCONFIG
 
-# 3. 创建日志目录
-echo "创建日志目录..."
-sudo mkdir -p /var/log/xray
-sudo chown root:root /var/log/xray
+# 4. 修复系统DNS配置
+echo "修复系统DNS配置..."
 
-# 4. 修复UDP转发的系统配置
-echo "配置系统UDP转发..."
+# 备份原始DNS配置
+sudo cp /etc/resolv.conf /etc/resolv.conf.bak.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
 
-# 启用IP转发
-echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf
-echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
+# 创建新的DNS配置
+sudo tee /etc/resolv.conf > /dev/null << 'DNSCONFIG'
+# DNS配置 - 防污染版本
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+nameserver 223.5.5.5
+options timeout:2
+options attempts:3
+options rotate
+DNSCONFIG
 
-# 5. 配置防火墙规则支持UDP
-echo "配置防火墙支持UDP..."
+# 5. 添加hosts文件条目，强制使用正确的IP
+echo "添加hosts文件条目..."
+sudo cp /etc/hosts /etc/hosts.bak.$(date +%Y%m%d_%H%M%S)
+
+# 移除旧的beanfun条目
+sudo sed -i '/beanfun/d' /etc/hosts
+
+# 添加正确的IP映射
+sudo tee -a /etc/hosts > /dev/null << 'HOSTSCONFIG'
+
+# Beanfun游戏平台 - 防DNS污染
+18.167.13.186 csp.hk.beanfun.com
+18.163.12.31 csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com
+HOSTSCONFIG
+
+# 6. 配置防火墙
+echo "配置防火墙规则..."
 
 # 清理现有规则
 sudo iptables -F
@@ -126,175 +204,208 @@ sudo iptables -X
 sudo iptables -t nat -F
 sudo iptables -t nat -X
 
-# 设置基本规则
+# 基本规则
 sudo iptables -P INPUT ACCEPT
 sudo iptables -P FORWARD ACCEPT  
 sudo iptables -P OUTPUT ACCEPT
 
-# 开放代理端口（TCP和UDP）
+# 开放代理端口
 sudo iptables -A INPUT -p tcp --dport 18889 -j ACCEPT
 sudo iptables -A INPUT -p udp --dport 18889 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 18890 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 12345 -j ACCEPT
 
+# DNS端口
+sudo iptables -A INPUT -p tcp --dport 53 -j ACCEPT
+sudo iptables -A INPUT -p udp --dport 53 -j ACCEPT
+
 # 允许已建立的连接
 sudo iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# 允许本地回环
 sudo iptables -A INPUT -i lo -j ACCEPT
 
-# 保存iptables规则
+# 保存规则
 sudo service iptables save 2>/dev/null || sudo iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
 
-# 6. 创建游戏专用代理脚本
-echo "创建游戏代理启动脚本..."
-sudo tee /usr/local/bin/game-proxy.sh > /dev/null << 'EOF'
+# 7. 启用IP转发
+echo "启用IP转发..."
+echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf
+echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# 8. 创建DNS测试脚本
+echo "创建DNS测试脚本..."
+sudo tee /usr/local/bin/dns-test.sh > /dev/null << 'TESTSCRIPT'
 #!/bin/bash
 
-# 游戏代理启动脚本
-echo "启动游戏专用代理环境..."
+echo "========== DNS解析测试 =========="
+echo "测试beanfun域名解析:"
 
-# 检查xray服务状态
+echo ""
+echo "1. 本地DNS解析:"
+dig +short csp.hk.beanfun.com
+
+echo ""
+echo "2. 使用8.8.8.8解析:"
+dig @8.8.8.8 +short csp.hk.beanfun.com
+
+echo ""
+echo "3. 使用1.1.1.1解析:"
+dig @1.1.1.1 +short csp.hk.beanfun.com
+
+echo ""
+echo "4. hosts文件映射:"
+grep beanfun /etc/hosts
+
+echo ""
+echo "5. 连接测试:"
+echo "测试18.167.13.186:443..."
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/18.167.13.186/443' && echo "✓ 连接成功" || echo "✗ 连接失败"
+
+echo "测试18.163.12.31:443..."
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/18.163.12.31/443' && echo "✓ 连接成功" || echo "✗ 连接失败"
+
+echo ""
+echo "6. HTTP测试:"
+curl -I --connect-timeout 10 https://csp.hk.beanfun.com/ 2>/dev/null | head -1 || echo "HTTP连接失败"
+
+echo ""
+echo "========== 代理测试 =========="
+echo "SOCKS5代理测试:"
+timeout 10 curl --socks5 vip1:123456@127.0.0.1:18889 -I https://csp.hk.beanfun.com/ 2>/dev/null | head -1 && echo "✓ SOCKS5代理正常" || echo "✗ SOCKS5代理异常"
+
+echo ""
+echo "HTTP代理测试:"
+timeout 10 curl --proxy http://vip1:123456@127.0.0.1:18890 -I https://csp.hk.beanfun.com/ 2>/dev/null | head -1 && echo "✓ HTTP代理正常" || echo "✗ HTTP代理异常"
+TESTSCRIPT
+
+sudo chmod +x /usr/local/bin/dns-test.sh
+
+# 9. 创建游戏启动脚本
+echo "创建游戏启动脚本..."
+sudo tee /usr/local/bin/beanfun-proxy.sh > /dev/null << 'GAMESCRIPT'
+#!/bin/bash
+
+echo "启动Beanfun游戏代理环境..."
+
+# 检查并启动xray
 if ! systemctl is-active --quiet xray; then
     echo "启动xray服务..."
     sudo systemctl start xray
+    sleep 3
 fi
 
-# 等待服务启动
-sleep 2
+# 刷新DNS缓存
+echo "刷新DNS缓存..."
+sudo systemctl restart systemd-resolved 2>/dev/null || true
 
-# 检查端口监听
-echo "检查端口状态:"
-sudo netstat -tuln | grep -E "(18889|18890|12345)"
+# 测试DNS解析
+echo "测试DNS解析..."
+/usr/local/bin/dns-test.sh
 
-# 测试连接
-echo "测试代理连接:"
-echo "SOCKS5测试:"
-timeout 10 curl --socks5 vip1:123456@127.0.0.1:18889 https://httpbin.org/ip 2>/dev/null && echo "SOCKS5 OK" || echo "SOCKS5 Failed"
+# 显示代理信息
+SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || ip route get 8.8.8.8 | awk '{print $7}' | head -1)
 
-echo "HTTP测试:"
-timeout 10 curl --proxy http://vip1:123456@127.0.0.1:18890 https://httpbin.org/ip 2>/dev/null && echo "HTTP OK" || echo "HTTP Failed"
+echo ""
+echo "=========================================="
+echo "Beanfun游戏代理已就绪!"
+echo "=========================================="
+echo "服务器IP: $SERVER_IP"
+echo "SOCKS5: $SERVER_IP:18889 (用户名:vip1 密码:123456)"
+echo "HTTP: $SERVER_IP:18890 (用户名:vip1 密码:123456)"
+echo ""
+echo "请在游戏登录器中设置代理:"
+echo "1. 优先使用SOCKS5代理"
+echo "2. 如果不支持，使用HTTP代理"
+echo "3. 确保游戏使用代理的DNS解析"
+echo ""
+echo "如有问题，请查看日志:"
+echo "sudo journalctl -u xray -f"
+GAMESCRIPT
 
-echo "游戏代理环境就绪!"
-EOF
+sudo chmod +x /usr/local/bin/beanfun-proxy.sh
 
-sudo chmod +x /usr/local/bin/game-proxy.sh
+# 10. 创建日志目录
+echo "创建日志目录..."
+sudo mkdir -p /var/log/xray
+sudo chown root:root /var/log/xray
 
-# 7. 创建proxychains配置（适合游戏使用）
-echo "安装和配置proxychains..."
-sudo yum -y install proxychains-ng 2>/dev/null || sudo yum -y install proxychains4 2>/dev/null || true
-
-sudo tee /etc/proxychains.conf > /dev/null << 'EOF'
-# Proxychains配置 - 游戏专用
-strict_chain
-proxy_dns
-remote_dns_subnet 224
-tcp_read_time_out 15000
-tcp_connect_time_out 8000
-
-# 本地网络不走代理
-localnet 127.0.0.0/255.0.0.0
-localnet 10.0.0.0/255.0.0.0
-localnet 172.16.0.0/255.240.0.0
-localnet 192.168.0.0/255.255.0.0
-
-# 静默模式
-quiet_mode
-
-[ProxyList]
-# 游戏可能需要这两种代理类型
-socks5  127.0.0.1 18889 vip1 123456
-http    127.0.0.1 18890 vip1 123456
-EOF
-
-# 8. 重新启动服务
-echo "重新启动xray服务..."
+# 11. 重启服务
+echo "重启xray服务..."
 sudo systemctl daemon-reload
 sudo systemctl restart xray
-
-# 等待服务完全启动
 sleep 3
 
-# 9. 验证服务状态
-echo "验证服务状态..."
-echo "===== 服务状态 ====="
-sudo systemctl status xray --no-pager -l
+# 12. 执行测试
+echo "执行DNS和代理测试..."
+/usr/local/bin/dns-test.sh
 
-echo "===== 端口监听 ====="
-sudo netstat -tuln | grep -E "(18889|18890|12345)"
+# 13. 生成配置总结
+SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || ip route get 8.8.8.8 | awk '{print $7}' | head -1)
 
-echo "===== 进程信息 ====="
-ps aux | grep xray | grep -v grep
-
-# 10. 执行连接测试
-echo "===== 连接测试 ====="
-echo "测试SOCKS5代理:"
-timeout 10 curl --socks5 vip1:123456@127.0.0.1:18889 https://httpbin.org/ip && echo "✓ SOCKS5正常" || echo "✗ SOCKS5异常"
-
-echo "测试HTTP代理:"
-timeout 10 curl --proxy http://vip1:123456@127.0.0.1:18890 https://httpbin.org/ip && echo "✓ HTTP正常" || echo "✗ HTTP异常"
-
-# 11. 获取服务器信息
-SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 ipinfo.io/ip 2>/dev/null || ip route get 8.8.8.8 | awk '{print $7}' | head -1)
-
-# 12. 生成游戏配置信息
-tee ~/Game_Proxy_Config.txt > /dev/null << EOF
+tee ~/Beanfun_Proxy_Config.txt > /dev/null << CONFIGSUMMARY
 #############################################################################
-游戏代理配置信息 (UDP修复版)
+Beanfun游戏代理配置 (DNS修复版)
 
 服务器IP: $SERVER_IP
-SOCKS5端口: 18889 (支持UDP)
-HTTP端口: 18890
-用户名: vip1, vip2, vip3  
+问题: DNS污染导致解析到错误IP
+解决: 强制使用正确的DNS和IP映射
+
+=== 代理设置 ===
+SOCKS5代理: $SERVER_IP:18889
+HTTP代理: $SERVER_IP:18890
+用户名: vip1, vip2, vip3
 密码: 123456
 
-=== 游戏登录器代理设置 ===
-方案1 - SOCKS5代理:
-  类型: SOCKS5
-  地址: $SERVER_IP:18889
-  用户名: vip1
-  密码: 123456
+=== 正确的IP地址 ===
+csp.hk.beanfun.com -> 18.167.13.186
+备用IP -> 18.163.12.31
 
-方案2 - HTTP代理:
-  类型: HTTP
-  地址: $SERVER_IP:18890  
-  用户名: vip1
-  密码: 123456
+=== 使用步骤 ===
+1. 在游戏登录器中设置SOCKS5代理
+2. 如果不支持SOCKS5，使用HTTP代理
+3. 确保代理设置中启用"代理DNS查询"
+4. 如果仍有问题，尝试清除本地DNS缓存
 
-方案3 - 使用proxychains (Linux):
-  命令: proxychains 游戏程序
-  或: proxychains wine 游戏程序.exe
+=== 本地DNS修复 (Windows) ===
+打开管理员CMD，执行:
+ipconfig /flushdns
+netsh winsock reset
+然后重启电脑
 
-=== 测试命令 ===
-SOCKS5测试: curl --socks5 vip1:123456@$SERVER_IP:18889 https://httpbin.org/ip
-HTTP测试: curl --proxy http://vip1:123456@$SERVER_IP:18890 https://httpbin.org/ip
+=== 本地hosts文件修复 (可选) ===
+Windows: C:\Windows\System32\drivers\etc\hosts
+添加以下行:
+18.167.13.186 csp.hk.beanfun.com
+18.163.12.31 csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com
 
 === 服务管理 ===
-启动游戏代理: sudo /usr/local/bin/game-proxy.sh
-查看服务状态: sudo systemctl status xray
-查看实时日志: sudo journalctl -u xray -f
+启动游戏代理: sudo /usr/local/bin/beanfun-proxy.sh
+DNS测试: sudo /usr/local/bin/dns-test.sh
+查看日志: sudo journalctl -u xray -f
 重启服务: sudo systemctl restart xray
 
 === 故障排除 ===
-如果游戏仍无法连接:
-1. 尝试不同的代理类型 (SOCKS5/HTTP)
-2. 检查游戏是否有内置代理设置
-3. 尝试使用透明代理模式
-4. 查看xray日志: sudo tail -f /var/log/xray/error.log
+1. 检查本地DNS是否被污染
+2. 确保游戏登录器支持代理
+3. 尝试不同的代理协议
+4. 检查防火墙设置
+5. 清除游戏缓存和本地DNS缓存
 
 #############################################################################
-EOF
+CONFIGSUMMARY
 
-echo "======================================"
-echo "UDP修复和游戏代理配置完成!"
-echo "======================================"
-echo "配置信息已保存到: ~/Game_Proxy_Config.txt"
-echo "服务器IP: $SERVER_IP"
-echo "SOCKS5端口: 18889 (支持UDP)"  
-echo "HTTP端口: 18890"
-echo "用户名: vip1/vip2/vip3"
-echo "密码: 123456"
 echo ""
-echo "请在游戏登录器中配置代理设置"
-echo "如果仍有问题，请查看详细日志:"
-echo "sudo journalctl -u xray -f"
+echo "======================================"
+echo "DNS修复和代理配置完成!"
+echo "======================================"
+echo "配置文件: ~/Beanfun_Proxy_Config.txt"
+echo "服务器IP: $SERVER_IP"
+echo ""
+echo "主要修复:"
+echo "✓ 修复DNS污染问题"
+echo "✓ 强制使用正确IP地址"
+echo "✓ 优化代理DNS解析"
+echo "✓ 添加专用测试工具"
+echo ""
+echo "请使用以下命令测试:"
+echo "sudo /usr/local/bin/beanfun-proxy.sh"
