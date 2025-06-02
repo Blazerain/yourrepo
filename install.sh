@@ -385,8 +385,8 @@ else
 fi
 
 # 验证端口配置 - 使用改进的检测方法
-CONFIGURED_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
-CONFIGURED_HTTP_PORT=$(grep -A20 '"protocol": "http"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
+CONFIGURED_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' /etc/xray/config.json | grep '"port":' | head -1 | sed 's/.*"port": *\([0-9]*\).*/\1/')
+CONFIGURED_HTTP_PORT=$(grep -A20 '"protocol": "http"' /etc/xray/config.json | grep '"port":' | head -1 | sed 's/.*"port": *\([0-9]*\).*/\1/')
 
 if [ "$CONFIGURED_SOCKS_PORT" = "$SOCKS5_PORT" ]; then
     echo "✅ SOCKS5端口配置验证: $CONFIGURED_SOCKS_PORT"
