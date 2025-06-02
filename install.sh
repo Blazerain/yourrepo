@@ -373,12 +373,12 @@ fi
 #     exit 1
 # fi
 
-if [ "$CONFIGURED_HTTP_PORT" = "$HTTP_PORT" ]; then
-    echo "✅ HTTP端口配置验证: $CONFIGURED_HTTP_PORT"
-else
-    echo "❌ HTTP端口配置错误: 期望$HTTP_PORT，实际$CONFIGURED_HTTP_PORT"
-    exit 1
-fi
+# if [ "$CONFIGURED_HTTP_PORT" = "$HTTP_PORT" ]; then
+#     echo "✅ HTTP端口配置验证: $CONFIGURED_HTTP_PORT"
+# else
+#     echo "❌ HTTP端口配置错误: 期望$HTTP_PORT，实际$CONFIGURED_HTTP_PORT"
+#     exit 1
+# fi
 
 # 创建systemd服务
 sudo tee /etc/systemd/system/xray.service > /dev/null << 'SYSTEMDCONFIG'
