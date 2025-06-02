@@ -8,25 +8,84 @@
 
 set -e
 
-# ====== 智能端口检测逻辑 ======
-# 优先级: 命令行参数 > 环境变量 > 默认值
+# ====== 智能端口检测逻辑（修复管道环境变量问题） ======
+# 解决方案：通过多种方式检测端口设置
 
-# 从命令行参数获取端口
+echo "🔍 检测端口配置..."
+
+# 方式1：检查命令行参数
 if [ "$#" -gt 0 ] && [ -n "$1" ]; then
     SOCKS5_PORT="$1"
-    echo "✓ 使用命令行参数端口: $SOCKS5_PORT"
-# 从环境变量获取端口  
+    echo "✅ 使用命令行参数端口: $SOCKS5_PORT"
+    
+# 方式2：检查环境变量
 elif [ -n "$SOCKS5_PORT" ]; then
-    echo "✓ 使用环境变量端口: $SOCKS5_PORT"
+    echo "✅ 使用环境变量端口: $SOCKS5_PORT"
+    
+# 方式3：从进程环境中读取（解决管道问题）
+elif ps aux | grep -v grep | grep -q "SOCKS5_PORT="; then
+    # 尝试从父进程环境中提取端口
+    DETECTED_PORT=$(ps aux | grep -v grep | grep "SOCKS5_PORT=" | sed 's/.*SOCKS5_PORT=\([0-9]\+\).*/\1/' | head -1)
+    if [[ "$DETECTED_PORT" =~ ^[0-9]+$ ]]; then
+        SOCKS5_PORT="$DETECTED_PORT"
+        echo "✅ 从进程环境检测到端口: $SOCKS5_PORT"
+    else
+        SOCKS5_PORT=18889
+        echo "⚠️ 进程环境检测失败，使用默认端口: $SOCKS5_PORT"
+    fi
+    
+# 方式4：检查是否为管道执行且有端口需求
+elif [ ! -t 0 ]; then
+    # 管道执行模式，检查常见的可用端口
+    echo "🔍 检测到管道执行模式，智能选择可用端口..."
+    
+    # 优先检查常用代理端口
+    for test_port in 1080 3128 8080 9999 10800 13000; do
+        if ! netstat -tlnp 2>/dev/null | grep -q ":$test_port "; then
+            SOCKS5_PORT=$test_port
+            echo "✅ 自动选择可用端口: $SOCKS5_PORT"
+            break
+        fi
+    done
+    
+    # 如果常用端口都被占用，使用默认端口
+    if [ -z "$SOCKS5_PORT" ]; then
+        SOCKS5_PORT=18889
+        echo "⚠️ 常用端口均被占用，使用默认端口: $SOCKS5_PORT"
+    fi
+    
 else
-    # 使用默认端口（适合管道执行）
-    SOCKS5_PORT=18889
-    echo "✓ 使用默认端口: $SOCKS5_PORT"
+    # 交互式模式
+    echo "🎯 交互式端口选择："
+    echo "1. 使用默认端口 18889"
+    echo "2. 使用常用端口 1080"
+    echo "3. 使用常用端口 3128"
+    echo "4. 自定义端口"
     echo ""
-    echo "💡 如需指定端口，请使用以下方式之一："
-    echo "   SOCKS5_PORT=1080 curl -sSL https://... | bash"
-    echo "   curl -sSL https://... | bash -s 1080"
-    echo ""
+    read -p "请选择 (1-4) [默认:1]: " port_choice
+    
+    case $port_choice in
+        2)
+            SOCKS5_PORT=1080
+            ;;
+        3)
+            SOCKS5_PORT=3128
+            ;;
+        4)
+            while true; do
+                read -p "请输入自定义端口 (1024-65535): " custom_port
+                if [[ "$custom_port" =~ ^[0-9]+$ ]] && [ "$custom_port" -ge 1024 ] && [ "$custom_port" -le 65535 ]; then
+                    SOCKS5_PORT=$custom_port
+                    break
+                else
+                    echo "错误: 请输入有效的端口号 (1024-65535)"
+                fi
+            done
+            ;;
+        *)
+            SOCKS5_PORT=18889
+            ;;
+    esac
 fi
 
 # 验证端口号
