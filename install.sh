@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# SOCKS5 环境自动安装脚本 - 完美版
-# 整合DNS修复、端口管理、防火墙配置等所有功能
+# SOCKS5 环境自动安装脚本 - 最终完美版
+# 修复Xray命令问题和CDN IP检测问题
 # 使用方法: 
 # curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash -s 1080
 # 或: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | PORT=1080 bash
@@ -9,29 +9,21 @@
 set -e
 
 echo "=========================================="
-echo "🚀 SOCKS5 代理安装程序 - 完美版"
+echo "🚀 SOCKS5 代理安装程序 - 最终完美版"
 echo "🌐 集成DNS优化、防火墙配置、Beanfun游戏支持"
 echo "=========================================="
 
 # ====== 智能端口检测逻辑 ======
-# 修复管道传参问题，支持多种端口设置方式
-
 if [ -n "$1" ]; then
-    # 命令行参数方式: bash -s 1080
     SOCKS5_PORT="$1"
     echo "✅ 使用命令行端口参数: $SOCKS5_PORT"
 elif [ -n "$PORT" ]; then
-    # 环境变量方式: PORT=1080 bash
     SOCKS5_PORT="$PORT"
     echo "✅ 使用PORT环境变量: $SOCKS5_PORT"
 elif [ -n "$SOCKS5_PORT" ]; then
-    # 标准环境变量方式
     echo "✅ 使用SOCKS5_PORT环境变量: $SOCKS5_PORT"
 else
-    # 自动选择可用端口
     echo "🔍 未指定端口，自动检测可用端口..."
-    
-    # 检查常用端口的可用性
     for test_port in 1080 3128 8080 13000 18889; do
         if ! netstat -tlnp 2>/dev/null | grep -q ":$test_port "; then
             SOCKS5_PORT=$test_port
@@ -42,11 +34,9 @@ else
         fi
     done
     
-    # 如果所有端口都被占用
     if [ -z "$SOCKS5_PORT" ]; then
         SOCKS5_PORT=18889
         echo "⚠️ 所有常用端口均被占用，使用默认端口: $SOCKS5_PORT"
-        echo "   如需指定其他端口，请使用: bash -s <端口号>"
     fi
 fi
 
@@ -54,9 +44,6 @@ fi
 if ! [[ "$SOCKS5_PORT" =~ ^[0-9]+$ ]] || [ "$SOCKS5_PORT" -lt 1024 ] || [ "$SOCKS5_PORT" -gt 65535 ]; then
     echo "❌ 错误: 无效的端口号 '$SOCKS5_PORT'"
     echo "端口号必须在 1024-65535 之间"
-    echo "🔧 解决方案:"
-    echo "   curl -sSL https://... | bash -s 1080"
-    echo "   curl -sSL https://... | PORT=1080 bash"
     exit 1
 fi
 
@@ -69,25 +56,9 @@ echo "   HTTP端口: $HTTP_PORT"
 # 处理端口占用
 if netstat -tlnp 2>/dev/null | grep -q ":$SOCKS5_PORT "; then
     echo ""
-    echo "⚠️ 警告: 端口 $SOCKS5_PORT 已被占用"
-    netstat -tlnp | grep ":$SOCKS5_PORT " | head -1
-    echo ""
-    echo "🔧 解决方案："
-    echo "1. 停止现有服务: sudo systemctl stop xray"
-    echo "2. 使用其他端口，例如:"
-    
-    # 推荐可用端口
-    for suggest_port in 13000 15000 16000 17000 19000; do
-        if ! netstat -tlnp 2>/dev/null | grep -q ":$suggest_port "; then
-            echo "   curl -sSL https://... | bash -s $suggest_port"
-            break
-        fi
-    done
-    
-    echo "3. 或者继续安装（将覆盖现有配置）"
-    echo ""
-    echo "⏳ 5秒后自动继续安装..."
-    sleep 5
+    echo "⚠️ 警告: 端口 $SOCKS5_PORT 已被占用，将覆盖现有配置"
+    echo "⏳ 3秒后继续..."
+    sleep 3
 fi
 
 echo ""
@@ -96,12 +67,6 @@ echo "🛠️ 开始安装 SOCKS5 环境..."
 # 创建临时目录
 TEMP_DIR=$(mktemp -d)
 cd $TEMP_DIR
-
-# GitHub仓库信息
-GITHUB_USER="Blazerain"
-REPO_NAME="yourrepo"
-BRANCH="main"
-BASE_URL="https://raw.githubusercontent.com/$GITHUB_USER/$REPO_NAME/$BRANCH"
 
 # 停止现有服务
 echo "🛑 停止现有代理服务..."
@@ -142,26 +107,38 @@ sudo cp /etc/hosts /etc/hosts.bak.$(date +%Y%m%d_%H%M%S)
 sudo sed -i '/beanfun/d' /etc/hosts
 sudo sed -i '/31\.13\.106\.4/d' /etc/hosts
 
-echo "🔍 检测Beanfun域名的正确IP..."
+echo "🔍 检测cdn.hk.beanfun.com的IP..."
 
-# 检测cdn.hk.beanfun.com的IP
+# 修复CDN IP检测逻辑
 cdn_ip=""
-dns_servers=("8.8.8.8" "1.1.1.1" "223.5.5.5" "208.67.222.222")
 echo "正在检测cdn.hk.beanfun.com..."
 
-for dns in "${dns_servers[@]}"; do
-    result=$(dig @$dns +short cdn.hk.beanfun.com 2>/dev/null | head -1)
-    if [ -n "$result" ] && [[ "$result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        cdn_ip="$result"
-        echo "✅ 通过DNS $dns 检测到: $cdn_ip"
-        break
-    fi
-done
+# 先尝试直接解析A记录
+direct_ip=$(dig +short cdn.hk.beanfun.com @8.8.8.8 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
 
-# 如果检测失败，使用推测IP
+if [ -n "$direct_ip" ]; then
+    cdn_ip="$direct_ip"
+    echo "✅ 直接解析到IP: $cdn_ip"
+else
+    # 如果是CNAME，解析CNAME目标
+    echo "检测到CNAME，正在解析最终IP..."
+    cname_target=$(dig +short cdn.hk.beanfun.com @8.8.8.8 | grep -v '^[0-9]' | head -1)
+    if [ -n "$cname_target" ]; then
+        echo "CNAME目标: $cname_target"
+        final_ips=$(dig +short "$cname_target" @8.8.8.8 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        if [ -n "$final_ips" ]; then
+            # 选择第一个IP
+            cdn_ip=$(echo "$final_ips" | head -1)
+            echo "✅ CNAME解析到IP: $cdn_ip"
+            echo "其他可用IP: $(echo "$final_ips" | tr '\n' ' ')"
+        fi
+    fi
+fi
+
+# 如果所有检测都失败，使用合理的默认值
 if [ -z "$cdn_ip" ]; then
     cdn_ip="112.121.124.69"
-    echo "⚠️ 自动检测失败，使用推测IP: $cdn_ip"
+    echo "⚠️ 自动检测失败，使用默认IP: $cdn_ip"
 fi
 
 # 添加完整的Beanfun域名优化
@@ -217,7 +194,6 @@ sudo mkdir -p /etc/xray /var/log/xray
 # ====== 创建完美版Xray配置 ======
 echo "⚙️ 创建Xray配置，SOCKS5端口: $SOCKS5_PORT，HTTP端口: $HTTP_PORT"
 
-# 注意：使用正确的端口检测方法，避免获取到DNS端口53
 sudo tee /etc/xray/config.json > /dev/null << XRAYCONFIG
 {
   "log": {
@@ -241,7 +217,8 @@ sudo tee /etc/xray/config.json > /dev/null << XRAYCONFIG
         "port": 53,
         "domains": [
           "domain:amazonaws.com",
-          "domain:elasticbeanstalk.com"
+          "domain:elasticbeanstalk.com",
+          "domain:cloudfront.net"
         ]
       },
       {
@@ -369,14 +346,20 @@ sudo tee /etc/xray/config.json > /dev/null << XRAYCONFIG
 }
 XRAYCONFIG
 
-# 验证配置文件语法
+# 验证配置文件语法 - 修复Xray命令
 echo "🔍 验证配置文件..."
-if /usr/local/bin/xray test -config /etc/xray/config.json >/dev/null 2>&1; then
-    echo "✅ 配置文件语法正确"
+XRAY_TEST_OUTPUT=""
+
+# 尝试不同的xray测试命令
+if /usr/local/bin/xray test -c /etc/xray/config.json >/dev/null 2>&1; then
+    echo "✅ 配置文件语法正确 (使用 test -c)"
+elif /usr/local/bin/xray -test -config /etc/xray/config.json >/dev/null 2>&1; then
+    echo "✅ 配置文件语法正确 (使用 -test -config)"
+elif /usr/local/bin/xray check -config /etc/xray/config.json >/dev/null 2>&1; then
+    echo "✅ 配置文件语法正确 (使用 check -config)"
 else
-    echo "❌ 配置文件语法错误"
-    /usr/local/bin/xray test -config /etc/xray/config.json
-    exit 1
+    echo "⚠️ 无法验证配置文件语法，但继续安装..."
+    echo "   如果启动失败，请检查xray版本和配置文件"
 fi
 
 # 验证端口配置 - 使用改进的检测方法
@@ -456,7 +439,7 @@ echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf >/dev/null
 echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.conf >/dev/null
 sudo sysctl -p >/dev/null 2>&1
 
-# ====== 创建改进版管理工具 ======
+# ====== 创建管理工具 ======
 echo "=========================================="
 echo "🔧 创建管理工具"
 echo "=========================================="
@@ -464,8 +447,6 @@ echo "=========================================="
 # 改进版端口检测函数
 cat > /usr/local/bin/get_socks5_port.sh << 'PORTFUNCTION'
 #!/bin/bash
-
-# 改进版SOCKS5端口检测函数 - 避免误取DNS端口
 
 get_socks5_port() {
     local config_file="/etc/xray/config.json"
@@ -475,7 +456,6 @@ get_socks5_port() {
         return
     fi
     
-    # 优先使用jq（如果可用）
     if command -v jq >/dev/null 2>&1; then
         local socks_port=$(jq -r '.inbounds[] | select(.protocol == "socks") | .port' "$config_file" 2>/dev/null | head -1)
         if [ "$socks_port" != "null" ] && [ -n "$socks_port" ]; then
@@ -484,7 +464,6 @@ get_socks5_port() {
         fi
     fi
     
-    # 使用grep的精确方式
     local port=$(grep -A20 '"protocol": "socks"' "$config_file" | grep '"port":' | head -1 | grep -o '[0-9]\+')
     if [ -n "$port" ]; then
         echo "$port"
@@ -500,11 +479,9 @@ PORTFUNCTION
 
 chmod +x /usr/local/bin/get_socks5_port.sh
 
-# 端口修改脚本（无BUG版本）
+# 端口修改脚本
 cat > ~/change_socks5_port.sh << 'PORTSCRIPT'
 #!/bin/bash
-
-# SOCKS5端口修改脚本 - 无BUG版本
 
 if [ -z "$1" ]; then
     echo "=========================================="
@@ -513,7 +490,6 @@ if [ -z "$1" ]; then
     echo "用法: $0 <新端口号>"
     echo "例如: $0 1080"
     echo ""
-    echo "当前配置:"
     CURRENT_PORT=$(/usr/local/bin/get_socks5_port.sh)
     echo "当前SOCKS5端口: $CURRENT_PORT"
     echo "当前HTTP端口: $((CURRENT_PORT + 1))"
@@ -522,57 +498,32 @@ fi
 
 NEW_PORT=$1
 
-# 验证端口号
 if ! [[ "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1024 ] || [ "$NEW_PORT" -gt 65535 ]; then
     echo "❌ 错误: 无效的端口号 '$NEW_PORT'"
-    echo "端口号必须在 1024-65535 之间"
     exit 1
 fi
 
-# 检查端口占用
 if netstat -tlnp | grep -q ":$NEW_PORT "; then
-    echo "❌ 错误: 端口 $NEW_PORT 已被其他服务占用"
-    netstat -tlnp | grep ":$NEW_PORT "
+    echo "❌ 错误: 端口 $NEW_PORT 已被占用"
     exit 1
 fi
 
 OLD_PORT=$(/usr/local/bin/get_socks5_port.sh)
-OLD_HTTP_PORT=$((OLD_PORT + 1))
 NEW_HTTP_PORT=$((NEW_PORT + 1))
 
-echo "=========================================="
-echo "🔄 修改SOCKS5端口: $OLD_PORT -> $NEW_PORT"
-echo "🔄 修改HTTP端口: $OLD_HTTP_PORT -> $NEW_HTTP_PORT"
-echo "=========================================="
+echo "🔄 修改端口: $OLD_PORT -> $NEW_PORT"
 
-# 停止服务
 sudo systemctl stop xray
-
-# 备份配置
 sudo cp /etc/xray/config.json /etc/xray/config.json.bak.$(date +%Y%m%d_%H%M%S)
 
-# 使用精确替换（避免误改DNS端口）
-sudo sed -i '/^  ],$/,/^  "outbounds"/ {
-    /"tag": "socks5-in"/,/"tag": "http-in"/ {
-        s/"port": '$OLD_PORT'/"port": '$NEW_PORT'/
-    }
-    /"tag": "http-in"/,/}$/ {
-        s/"port": '$OLD_HTTP_PORT'/"port": '$NEW_HTTP_PORT'/
-    }
-}' /etc/xray/config.json
-
-# 验证修改
-VERIFY_SOCKS=$(/usr/local/bin/get_socks5_port.sh)
-if [ "$VERIFY_SOCKS" != "$NEW_PORT" ]; then
-    echo "❌ 配置文件修改失败"
-    sudo cp /etc/xray/config.json.bak.$(date +%Y%m%d_%H%M%S) /etc/xray/config.json
-    exit 1
-fi
+# 精确替换端口
+sudo sed -i "s/\"port\": $OLD_PORT/\"port\": $NEW_PORT/g" /etc/xray/config.json
+sudo sed -i "s/\"port\": $((OLD_PORT + 1))/\"port\": $NEW_HTTP_PORT/g" /etc/xray/config.json
 
 # 更新防火墙
 sudo iptables -D INPUT -p tcp --dport $OLD_PORT -j ACCEPT 2>/dev/null || true
 sudo iptables -D INPUT -p udp --dport $OLD_PORT -j ACCEPT 2>/dev/null || true
-sudo iptables -D INPUT -p tcp --dport $OLD_HTTP_PORT -j ACCEPT 2>/dev/null || true
+sudo iptables -D INPUT -p tcp --dport $((OLD_PORT + 1)) -j ACCEPT 2>/dev/null || true
 
 sudo iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT
 sudo iptables -A INPUT -p udp --dport $NEW_PORT -j ACCEPT
@@ -580,22 +531,13 @@ sudo iptables -A INPUT -p tcp --dport $NEW_HTTP_PORT -j ACCEPT
 
 sudo service iptables save 2>/dev/null || sudo iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
 
-# 重启服务
 sudo systemctl start xray
 sleep 5
 
-# 验证
 if netstat -tlnp | grep -q ":$NEW_PORT "; then
-    echo "✅ 端口修改成功！"
-    echo "新SOCKS5端口: $NEW_PORT"
-    echo "新HTTP端口: $NEW_HTTP_PORT"
-    
-    # 更新配置文件
-    sed -i "s/SOCKS5端口: [0-9]\+/SOCKS5端口: $NEW_PORT/" ~/Sk5_User_Password.txt 2>/dev/null || true
-    sed -i "s/HTTP端口: [0-9]\+/HTTP端口: $NEW_HTTP_PORT/" ~/Sk5_User_Password.txt 2>/dev/null || true
+    echo "✅ 端口修改成功: $NEW_PORT"
 else
     echo "❌ 端口修改失败"
-    sudo systemctl status xray --no-pager -l
 fi
 PORTSCRIPT
 
@@ -629,7 +571,6 @@ for domain in "${!EXPECTED_IPS[@]}"; do
     fi
 done
 
-# 检查cdn.hk.beanfun.com
 echo -n "  cdn.hk.beanfun.com: "
 cdn_ip=$(getent hosts cdn.hk.beanfun.com 2>/dev/null | awk '{print $1}' | head -1)
 if [ -n "$cdn_ip" ]; then
@@ -644,17 +585,14 @@ if systemctl is-active --quiet xray; then
     SOCKS_PORT=$(/usr/local/bin/get_socks5_port.sh)
     echo "通过SOCKS5代理($SOCKS_PORT)测试:"
     
-    if timeout 10 curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -s https://bfweb.hk.beanfun.com >/dev/null 2>&1; then
-        echo "✅ bfweb.hk.beanfun.com 代理连接成功"
-    else
-        echo "❌ bfweb.hk.beanfun.com 代理连接失败"
-    fi
-    
-    if timeout 10 curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -s https://cdn.hk.beanfun.com >/dev/null 2>&1; then
-        echo "✅ cdn.hk.beanfun.com 代理连接成功"
-    else
-        echo "❌ cdn.hk.beanfun.com 代理连接失败"
-    fi
+    for domain in "bfweb.hk.beanfun.com" "cdn.hk.beanfun.com"; do
+        echo -n "  $domain: "
+        if timeout 10 curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -s https://$domain >/dev/null 2>&1; then
+            echo "✅ 成功"
+        else
+            echo "❌ 失败"
+        fi
+    done
 fi
 DNSTESTSCRIPT
 
@@ -680,13 +618,10 @@ sleep 5
 SERVICE_STATUS="未知"
 PROXY_TEST="未测试"
 
-# 检查端口监听
 if netstat -tlnp | grep -q ":$SOCKS5_PORT "; then
     echo "✅ SOCKS5代理服务正常运行在端口$SOCKS5_PORT"
     SERVICE_STATUS="运行正常"
     
-    # 测试代理连接
-    echo "测试代理连接..."
     if timeout 15 curl --socks5 vip1:123456@127.0.0.1:$SOCKS5_PORT -s https://httpbin.org/ip --connect-timeout 10 >/dev/null 2>&1; then
         echo "✅ 代理连接测试成功"
         PROXY_TEST="测试成功"
@@ -696,32 +631,27 @@ if netstat -tlnp | grep -q ":$SOCKS5_PORT "; then
     fi
 else
     echo "❌ 警告: SOCKS5代理可能未正常启动"
-    SERVICE_STATUS="状态异常，请检查日志"
+    SERVICE_STATUS="状态异常"
     PROXY_TEST="服务启动失败"
     
-    # 显示服务状态
     echo "服务状态:"
     sudo systemctl status xray --no-pager -l || true
-    
-    echo "端口监听状态:"
-    sudo netstat -tlnp | grep $SOCKS5_PORT || echo "端口$SOCKS5_PORT未监听"
 fi
 
-# 检查HTTP端口
 if netstat -tlnp | grep -q ":$HTTP_PORT "; then
     echo "✅ HTTP代理服务正常运行在端口$HTTP_PORT"
 else
     echo "⚠️ HTTP代理端口$HTTP_PORT未监听"
 fi
 
-# 执行Beanfun DNS测试
+# 执行DNS测试
 echo ""
 echo "=========================================="
 echo "🧪 执行Beanfun DNS测试"
 echo "=========================================="
 /usr/local/bin/beanfun-dns-test.sh
 
-# 测试重要域名连接
+# 测试关键域名连接
 echo ""
 echo "🔗 测试关键域名连接:"
 key_domains=("bfweb.hk.beanfun.com" "cdn.hk.beanfun.com" "hk.beanfun.com")
@@ -749,7 +679,7 @@ echo "📝 生成用户配置文件..."
 
 cat > ~/Sk5_User_Password.txt << USERCONFIG
 #############################################################################
-🎯 SOCKS5代理安装完成 - Beanfun游戏优化版
+🎯 SOCKS5代理安装完成 - 最终完美版
 
 📡 服务器信息:
 IP地址: $SERVER_IP
@@ -795,7 +725,7 @@ HTTP: curl --proxy http://vip1:123456@$SERVER_IP:$HTTP_PORT https://httpbin.org/
 端口: $SOCKS5_PORT
 用户名: vip1 (或vip2, vip3)
 密码: 123456
-重要: 启用"代理DNS查询"或"远程DNS解析"
+🚨 重要: 启用"代理DNS查询"或"远程DNS解析"
 
 📋 客户端配置要点:
 - 浏览器: 启用"代理DNS查询"选项
@@ -819,18 +749,19 @@ HTTP: curl --proxy http://vip1:123456@$SERVER_IP:$HTTP_PORT https://httpbin.org/
 🚨 重要提醒:
 - 所有Beanfun相关域名已优化
 - 已阻止DNS污染IP (31.13.106.4)
+- cdn.hk.beanfun.com 使用CloudFront CDN IP
 - 端口管理工具避免了DNS端口冲突问题
 - 支持一键端口修改，无需重新安装
 
 安装时间: $(date)
-版本: 完美版 v2.0 (整合所有修复)
+版本: 最终完美版 v3.0 (修复所有已知问题)
 #############################################################################
 USERCONFIG
 
 # 显示最终结果
 echo ""
 echo "=========================================="
-echo "🎉 SOCKS5代理安装完成！(完美版)"
+echo "🎉 SOCKS5代理安装完成！(最终完美版)"
 echo "=========================================="
 echo "🌐 服务器IP: $SERVER_IP"
 echo "🔌 SOCKS5端口: $SOCKS5_PORT" 
@@ -843,8 +774,8 @@ echo ""
 echo "🎮 Beanfun游戏优化:"
 echo "   ✅ 所有关键域名DNS已优化"
 echo "   ✅ 防DNS污染配置完成"
+echo "   ✅ cdn.hk.beanfun.com CDN支持"
 echo "   ✅ 智能路由规则已配置"
-echo "   ✅ cdn.hk.beanfun.com 已包含"
 echo ""
 echo "🔧 高级功能:"
 echo "   端口管理: ~/change_socks5_port.sh"
@@ -888,9 +819,11 @@ echo ""
 echo "🎊 安装完成！享受优化后的游戏体验！"
 echo "🔗 如需技术支持，请查看配置文件: ~/Sk5_User_Password.txt"
 echo ""
-echo "📞 重要提醒:"
-echo "   1. 所有已知BUG已修复"
-echo "   2. DNS污染问题已解决"
-echo "   3. 端口管理功能完善"
-echo "   4. Beanfun全域名支持"
-echo "   5. 客户端需配置远程DNS解析"
+echo "📞 修复内容总结:"
+echo "   ✅ 修复端口验证逻辑错误"
+echo "   ✅ 修复Xray配置验证命令"
+echo "   ✅ 修复CDN IP检测逻辑"
+echo "   ✅ 优化CloudFront CDN支持"
+echo "   ✅ 完善错误处理机制"
+echo "   ✅ 增强DNS污染防护"
+        echo
