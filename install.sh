@@ -347,20 +347,20 @@ sudo tee /etc/xray/config.json > /dev/null << XRAYCONFIG
 XRAYCONFIG
 
 # 验证配置文件语法 - 修复Xray命令
-echo "🔍 验证配置文件..."
-XRAY_TEST_OUTPUT=""
+# echo "🔍 验证配置文件..."
+# XRAY_TEST_OUTPUT=""
 
 # 尝试不同的xray测试命令
-if /usr/local/bin/xray test -c /etc/xray/config.json >/dev/null 2>&1; then
-    echo "✅ 配置文件语法正确 (使用 test -c)"
-elif /usr/local/bin/xray -test -config /etc/xray/config.json >/dev/null 2>&1; then
-    echo "✅ 配置文件语法正确 (使用 -test -config)"
-elif /usr/local/bin/xray check -config /etc/xray/config.json >/dev/null 2>&1; then
-    echo "✅ 配置文件语法正确 (使用 check -config)"
-else
-    echo "⚠️ 无法验证配置文件语法，但继续安装..."
-    echo "   如果启动失败，请检查xray版本和配置文件"
-fi
+# if /usr/local/bin/xray test -c /etc/xray/config.json >/dev/null 2>&1; then
+#     echo "✅ 配置文件语法正确 (使用 test -c)"
+# elif /usr/local/bin/xray -test -config /etc/xray/config.json >/dev/null 2>&1; then
+#     echo "✅ 配置文件语法正确 (使用 -test -config)"
+# elif /usr/local/bin/xray check -config /etc/xray/config.json >/dev/null 2>&1; then
+#     echo "✅ 配置文件语法正确 (使用 check -config)"
+# else
+#     echo "⚠️ 无法验证配置文件语法，但继续安装..."
+#     echo "   如果启动失败，请检查xray版本和配置文件"
+# fi
 
 # 验证端口配置 - 使用改进的检测方法
 # CONFIGURED_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
@@ -381,6 +381,7 @@ fi
 # fi
 
 # 创建systemd服务
+ echo "创建systemd服务"
 sudo tee /etc/systemd/system/xray.service > /dev/null << 'SYSTEMDCONFIG'
 [Unit]
 Description=Xray Service
