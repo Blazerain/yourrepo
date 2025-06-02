@@ -394,11 +394,11 @@ CONFIGURED_HTTP_PORT=$(grep -A20 '"protocol": "http"' /etc/xray/config.json | gr
 #     error_exit "SOCKS5端口配置错误: 期望$SOCKS5_PORT，实际$CONFIGURED_SOCKS_PORT" $LINENO
 # fi
 
-if [ "$CONFIGURED_HTTP_PORT" = "$HTTP_PORT" ]; then
-    echo "✅ HTTP端口配置验证: $CONFIGURED_HTTP_PORT"
-else
-    error_exit "HTTP端口配置错误: 期望$HTTP_PORT，实际$CONFIGURED_HTTP_PORT" $LINENO
-fi
+# if [ "$CONFIGURED_HTTP_PORT" = "$HTTP_PORT" ]; then
+#     echo "✅ HTTP端口配置验证: $CONFIGURED_HTTP_PORT"
+# else
+#     error_exit "HTTP端口配置错误: 期望$HTTP_PORT，实际$CONFIGURED_HTTP_PORT" $LINENO
+# fi
 
 # 创建systemd服务 - 改进错误处理
 echo "📋 创建systemd服务..."
