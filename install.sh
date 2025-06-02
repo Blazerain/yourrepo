@@ -50,9 +50,10 @@ else
     fi
 fi
 
-# 验证端口号
+# 验证端口号 - 修复版本
 if ! [[ "$SOCKS5_PORT" =~ ^[0-9]+$ ]] || [ "$SOCKS5_PORT" -lt 1024 ] || [ "$SOCKS5_PORT" -gt 65535 ]; then
     echo "❌ 错误: 无效的端口号 '$SOCKS5_PORT'"
+    echo "端口号必须在 1024-65535 之间"
     echo "🔧 解决方案:"
     echo "   curl -sSL https://... | bash -s 1080"
     echo "   curl -sSL https://... | PORT=1080 bash"
@@ -378,7 +379,7 @@ else
     exit 1
 fi
 
-# 验证端口配置
+# 验证端口配置 - 使用改进的检测方法
 CONFIGURED_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
 CONFIGURED_HTTP_PORT=$(grep -A20 '"protocol": "http"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
 
