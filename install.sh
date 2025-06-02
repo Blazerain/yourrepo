@@ -1,9 +1,79 @@
 #!/bin/bash
 
-# SOCKS5 环境自动安装脚本
-# 使用方法: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash
+# SOCKS5 环境自动安装脚本 - 支持自定义端口
+# 使用方法: 
+# 默认端口: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash
+# 自定义端口: SOCKS5_PORT=1080 curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash
+# 或者: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash -s -- 1080
 
 set -e
+
+# ====== 端口配置区域 ======
+# 默认端口为18889，可通过以下方式自定义：
+# 1. 环境变量: SOCKS5_PORT=1080 bash install.sh
+# 2. 命令行参数: bash install.sh 1080
+# 3. 交互式输入
+
+# 检查命令行参数
+if [ -n "$1" ]; then
+    SOCKS5_PORT="$1"
+elif [ -n "$SOCKS5_PORT" ]; then
+    # 使用环境变量
+    SOCKS5_PORT="$SOCKS5_PORT"
+else
+    # 交互式询问用户
+    echo "请选择SOCKS5端口配置："
+    echo "1. 使用默认端口 18889"
+    echo "2. 使用常用端口 1080"
+    echo "3. 使用常用端口 3128"
+    echo "4. 自定义端口"
+    echo ""
+    read -p "请选择 (1-4) [默认:1]: " port_choice
+    
+    case $port_choice in
+        2)
+            SOCKS5_PORT=1080
+            ;;
+        3)
+            SOCKS5_PORT=3128
+            ;;
+        4)
+            while true; do
+                read -p "请输入自定义端口 (1024-65535): " custom_port
+                if [[ "$custom_port" =~ ^[0-9]+$ ]] && [ "$custom_port" -ge 1024 ] && [ "$custom_port" -le 65535 ]; then
+                    SOCKS5_PORT=$custom_port
+                    break
+                else
+                    echo "错误: 请输入有效的端口号 (1024-65535)"
+                fi
+            done
+            ;;
+        *)
+            SOCKS5_PORT=18889
+            ;;
+    esac
+fi
+
+# 验证端口号
+if ! [[ "$SOCKS5_PORT" =~ ^[0-9]+$ ]] || [ "$SOCKS5_PORT" -lt 1024 ] || [ "$SOCKS5_PORT" -gt 65535 ]; then
+    echo "错误: 无效的端口号 '$SOCKS5_PORT'，使用默认端口 18889"
+    SOCKS5_PORT=18889
+fi
+
+echo "=========================================="
+echo "SOCKS5 代理端口设置: $SOCKS5_PORT"
+echo "=========================================="
+
+# 检查端口是否被占用
+if netstat -tlnp | grep -q ":$SOCKS5_PORT "; then
+    echo "警告: 端口 $SOCKS5_PORT 已被占用"
+    netstat -tlnp | grep ":$SOCKS5_PORT "
+    read -p "是否继续安装？这将停止现有服务 (y/n): " confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo "安装已取消"
+        exit 1
+    fi
+fi
 
 echo "开始安装 SOCKS5 环境..."
 
@@ -65,10 +135,10 @@ if yum list available dante-server >/dev/null 2>&1; then
     sudo yum -y install dante-server
     SOCKS_METHOD="dante"
     
-    # 配置dante
-    sudo tee /etc/sockd.conf > /dev/null << 'DANTEEOF'
+    # 配置dante（使用变量端口）
+    sudo tee /etc/sockd.conf > /dev/null << DANTEEOF
 logoutput: /var/log/sockd.log
-internal: 0.0.0.0 port = 18889
+internal: 0.0.0.0 port = $SOCKS5_PORT
 external: eth0
 method: username
 user.privileged: root
@@ -145,15 +215,21 @@ else
     # 创建xray配置目录
     sudo mkdir -p /etc/xray
     
-    # 创建xray配置文件
-    sudo tee /etc/xray/config.json > /dev/null << 'XRAYEOF'
+    # 创建xray配置文件（使用变量端口）
+    sudo tee /etc/xray/config.json > /dev/null << XRAYEOF
 {
   "log": {
     "loglevel": "warning"
   },
+  "dns": {
+    "servers": [
+      "8.8.8.8",
+      "1.1.1.1"
+    ]
+  },
   "inbounds": [
     {
-      "port": 18889,
+      "port": $SOCKS5_PORT,
       "protocol": "socks",
       "listen": "0.0.0.0",
       "settings": {
@@ -212,10 +288,10 @@ echo "配置防火墙..."
 sudo systemctl stop firewalld 2>/dev/null || true
 sudo systemctl disable firewalld 2>/dev/null || true
 
-# 开放端口
-echo "开放端口..."
-sudo iptables -I INPUT -p tcp --dport 18889 -j ACCEPT 2>/dev/null || true
-sudo iptables -I INPUT -p udp --dport 18889 -j ACCEPT 2>/dev/null || true
+# 开放端口（使用变量端口）
+echo "开放端口 $SOCKS5_PORT..."
+sudo iptables -I INPUT -p tcp --dport $SOCKS5_PORT -j ACCEPT 2>/dev/null || true
+sudo iptables -I INPUT -p udp --dport $SOCKS5_PORT -j ACCEPT 2>/dev/null || true
 
 # 保存iptables规则
 sudo service iptables save 2>/dev/null || sudo iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
@@ -244,14 +320,14 @@ SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 ipinfo.io/ip 2>/dev
 echo "验证服务状态..."
 sleep 5
 
-# 检查端口监听
-if sudo netstat -tlnp | grep -q ":18889 "; then
-    echo "✓ SOCKS5代理服务正常运行在端口18889"
+# 检查端口监听（使用变量端口）
+if sudo netstat -tlnp | grep -q ":$SOCKS5_PORT "; then
+    echo "✓ SOCKS5代理服务正常运行在端口$SOCKS5_PORT"
     SERVICE_STATUS="运行正常"
     
     # 进一步测试代理连接
     echo "测试代理连接..."
-    if timeout 10 curl --socks5 vip1:123456@127.0.0.1:18889 -s https://httpbin.org/ip >/dev/null 2>&1; then
+    if timeout 10 curl --socks5 vip1:123456@127.0.0.1:$SOCKS5_PORT -s https://httpbin.org/ip >/dev/null 2>&1; then
         echo "✓ 代理连接测试成功"
         PROXY_TEST="测试成功"
     else
@@ -268,8 +344,69 @@ else
     sudo systemctl status $SERVICE_NAME --no-pager -l || true
     
     echo "端口监听状态:"
-    sudo netstat -tlnp | grep 18889 || echo "端口18889未监听"
+    sudo netstat -tlnp | grep $SOCKS5_PORT || echo "端口$SOCKS5_PORT未监听"
 fi
+
+# 创建端口修改脚本
+tee ~/change_socks5_port.sh > /dev/null << 'PORTSCRIPTEOF'
+#!/bin/bash
+
+# SOCKS5端口修改脚本
+
+if [ -z "$1" ]; then
+    echo "用法: $0 <新端口号>"
+    echo "例如: $0 1080"
+    exit 1
+fi
+
+NEW_PORT=$1
+
+# 验证端口号
+if ! [[ "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1024 ] || [ "$NEW_PORT" -gt 65535 ]; then
+    echo "错误: 无效的端口号 '$NEW_PORT'"
+    exit 1
+fi
+
+echo "正在修改SOCKS5端口为: $NEW_PORT"
+
+# 检查服务类型
+if [ -f "/etc/xray/config.json" ]; then
+    # 修改xray配置
+    sudo sed -i "s/\"port\": [0-9]\+/\"port\": $NEW_PORT/" /etc/xray/config.json
+    SERVICE_NAME="xray"
+elif [ -f "/etc/sockd.conf" ]; then
+    # 修改dante配置
+    sudo sed -i "s/port = [0-9]\+/port = $NEW_PORT/" /etc/sockd.conf
+    SERVICE_NAME="sockd"
+else
+    echo "错误: 未找到SOCKS5配置文件"
+    exit 1
+fi
+
+# 更新防火墙规则
+echo "更新防火墙规则..."
+sudo iptables -I INPUT -p tcp --dport $NEW_PORT -j ACCEPT 2>/dev/null || true
+sudo iptables -I INPUT -p udp --dport $NEW_PORT -j ACCEPT 2>/dev/null || true
+sudo service iptables save 2>/dev/null || sudo iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
+
+# 重启服务
+echo "重启SOCKS5服务..."
+sudo systemctl restart $SERVICE_NAME
+
+# 验证
+sleep 3
+if sudo netstat -tlnp | grep -q ":$NEW_PORT "; then
+    echo "✓ 端口修改成功！新端口: $NEW_PORT"
+    
+    # 更新配置文件
+    sed -i "s/端口: [0-9]\+/端口: $NEW_PORT/" ~/Sk5_User_Password.txt 2>/dev/null || true
+else
+    echo "✗ 端口修改失败，请检查日志"
+    sudo systemctl status $SERVICE_NAME
+fi
+PORTSCRIPTEOF
+
+chmod +x ~/change_socks5_port.sh
 
 # 创建用户信息文件
 tee ~/Sk5_User_Password.txt > /dev/null << CONFIGEOF
@@ -278,7 +415,7 @@ SOCKS5代理安装完成
 
 服务器信息:
 IP地址: $SERVER_IP
-端口: 18889
+端口: $SOCKS5_PORT
 协议: SOCKS5
 
 用户账号:
@@ -290,6 +427,10 @@ IP地址: $SERVER_IP
 连接测试: $PROXY_TEST
 使用方法: $SOCKS_METHOD
 
+=== 端口修改 ===
+修改端口命令: ~/change_socks5_port.sh <新端口>
+例如: ~/change_socks5_port.sh 1080
+
 === 服务管理命令 ===
 启动服务: sudo systemctl start $SERVICE_NAME
 停止服务: sudo systemctl stop $SERVICE_NAME
@@ -298,22 +439,29 @@ IP地址: $SERVER_IP
 查看日志: sudo journalctl -u $SERVICE_NAME -f
 
 === 连接测试命令 ===
-curl --socks5 vip1:123456@$SERVER_IP:18889 https://httpbin.org/ip
-curl --socks5 vip1:123456@127.0.0.1:18889 https://httpbin.org/ip
+curl --socks5 vip1:123456@$SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip
+curl --socks5 vip1:123456@127.0.0.1:$SOCKS5_PORT https://httpbin.org/ip
 
 === 客户端配置示例 ===
 代理类型: SOCKS5
 服务器: $SERVER_IP
-端口: 18889
+端口: $SOCKS5_PORT
 用户名: vip1 (或vip2, vip3)
 密码: 123456
+
+=== 常用端口推荐 ===
+1080  - SOCKS标准端口
+3128  - HTTP代理常用端口
+8080  - 备用代理端口
+18889 - 原默认端口
 
 === 故障排除 ===
 1. 检查服务状态: sudo systemctl status $SERVICE_NAME
 2. 查看错误日志: sudo journalctl -u $SERVICE_NAME -n 50
-3. 检查端口监听: sudo netstat -tlnp | grep 18889
-4. 检查防火墙: sudo iptables -L | grep 18889
-5. 重新安装: 重新运行此安装脚本
+3. 检查端口监听: sudo netstat -tlnp | grep $SOCKS5_PORT
+4. 检查防火墙: sudo iptables -L | grep $SOCKS5_PORT
+5. 修改端口: ~/change_socks5_port.sh <新端口>
+6. 重新安装: 重新运行此安装脚本
 
 安装时间: $(date)
 #############################################################################
@@ -321,22 +469,25 @@ CONFIGEOF
 
 # 显示安装结果
 echo ""
-echo "======================================"
+echo "=========================================="
 echo "SOCKS5代理安装完成！"
-echo "======================================"
+echo "=========================================="
 echo "服务器IP: $SERVER_IP"
-echo "端口: 18889" 
+echo "端口: $SOCKS5_PORT" 
 echo "用户名: vip1, vip2, vip3"
 echo "密码: 123456"
 echo "服务状态: $SERVICE_STATUS"
 echo "详细信息: ~/Sk5_User_Password.txt"
+echo ""
+echo "🔧 端口修改工具: ~/change_socks5_port.sh"
+echo "   用法: ~/change_socks5_port.sh 1080"
 echo ""
 
 if [ "$SERVICE_STATUS" = "运行正常" ]; then
     echo "✓ 安装成功！可以开始使用代理服务"
     echo ""
     echo "快速测试命令:"
-    echo "curl --socks5 vip1:123456@$SERVER_IP:18889 https://httpbin.org/ip"
+    echo "curl --socks5 vip1:123456@$SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip"
 else
     echo "⚠ 安装可能存在问题，请检查日志:"
     echo "sudo journalctl -u $SERVICE_NAME -f"
