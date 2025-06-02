@@ -2,7 +2,7 @@
 
 # Shadowsocks一键安装脚本 - Beanfun游戏优化版
 # 支持CentOS/RHEL 7/8, Ubuntu, Debian
-# 使用方法: curl -sSL https://raw.githubusercontent.com/your-repo/ss.sh | bash
+# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss.sh | bash
 # 或者: bash install_shadowsocks.sh
 
 set -e
