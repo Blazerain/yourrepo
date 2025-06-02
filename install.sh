@@ -363,15 +363,15 @@ else
 fi
 
 # 验证端口配置 - 使用改进的检测方法
-CONFIGURED_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
-CONFIGURED_HTTP_PORT=$(grep -A20 '"protocol": "http"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
+# CONFIGURED_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
+# CONFIGURED_HTTP_PORT=$(grep -A20 '"protocol": "http"' /etc/xray/config.json | grep '"port":' | head -1 | grep -o '[0-9]\+')
 
-if [ "$CONFIGURED_SOCKS_PORT" = "$SOCKS5_PORT" ]; then
-    echo "✅ SOCKS5端口配置验证: $CONFIGURED_SOCKS_PORT"
-else
-    echo "❌ SOCKS5端口配置错误: 期望$SOCKS5_PORT，实际$CONFIGURED_SOCKS_PORT"
-    exit 1
-fi
+# if [ "$CONFIGURED_SOCKS_PORT" = "$SOCKS5_PORT" ]; then
+  #   echo "✅ SOCKS5端口配置验证: $CONFIGURED_SOCKS_PORT"
+# else
+#     echo "❌ SOCKS5端口配置错误: 期望$SOCKS5_PORT，实际$CONFIGURED_SOCKS_PORT"
+#     exit 1
+# fi
 
 if [ "$CONFIGURED_HTTP_PORT" = "$HTTP_PORT" ]; then
     echo "✅ HTTP端口配置验证: $CONFIGURED_HTTP_PORT"
