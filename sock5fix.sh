@@ -2,7 +2,7 @@
 
 # SOCKS5 DNS解析模式修复指南
 # 解决客户端使用本地DNS而不是代理服务器DNS的问题
-
+# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/sock5fix.sh | bash 
 echo "=========================================="
 echo "🔍 SOCKS5 DNS解析模式问题诊断"
 echo "=========================================="
