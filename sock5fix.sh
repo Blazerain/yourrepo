@@ -3,7 +3,7 @@
 # 简化版SOCKS5端口修改工具
 # 基于SOCKS5 DNS解析优化，专注实用性
 # 使用方法: ./change_port.sh [端口号]
-# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/sock5fix.sh | bash 
+#  curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/sock5fix.sh | bash -s 12880
 
 echo "=========================================="
 echo "🔧 SOCKS5端口修改工具 - 简化版"
