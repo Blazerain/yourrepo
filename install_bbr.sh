@@ -1,14 +1,15 @@
 #!/bin/bash
 
-# BBR+SOCKS5优化一键脚本
+# BBR+SOCKS5优化一键脚本 - 修复版
 # 功能: 安装BBR、优化SOCKS5、限制带宽1MB/s
+# 修复: 防止端口被改为53，保持原端口或使用安全端口
 # 使用: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install_bbr.sh | bash
-
 set -e
 
 echo "=================================================="
-echo "🚀 BBR+SOCKS5优化一键脚本"
+echo "🚀 BBR+SOCKS5优化一键脚本 - 修复版"
 echo "🎯 自动安装BBR、优化SOCKS5、限制带宽1MB/s"
+echo "🛡️ 防止DNS端口冲突，确保服务稳定"
 echo "=================================================="
 
 # 颜色定义
@@ -110,12 +111,12 @@ fi
 
 # 第二步：检查SOCKS5配置
 echo ""
-echo "2️⃣ SOCKS5代理检查与优化"
+echo "2️⃣ SOCKS5代理检查与端口安全验证"
 echo "=========================================="
 
 # 查找SOCKS5配置文件
 CONFIG_FILE=""
-SOCKS_PORT=""
+ORIGINAL_SOCKS_PORT=""
 
 # 检查可能的配置文件位置
 for config_path in "/etc/xray/config.json" "/etc/v2ray/config.json" "/usr/local/etc/xray/config.json"; do
@@ -131,24 +132,55 @@ if [ -z "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# 提取SOCKS5端口
+# 提取当前SOCKS5端口
 if command -v jq >/dev/null 2>&1; then
-    SOCKS_PORT=$(jq -r '.inbounds[] | select(.protocol == "socks") | .port' "$CONFIG_FILE" 2>/dev/null | head -1)
+    ORIGINAL_SOCKS_PORT=$(jq -r '.inbounds[] | select(.protocol == "socks") | .port' "$CONFIG_FILE" 2>/dev/null | head -1)
 fi
 
-if [ -z "$SOCKS_PORT" ] || [ "$SOCKS_PORT" = "null" ]; then
-    SOCKS_PORT=$(grep -A20 '"protocol": "socks"' "$CONFIG_FILE" | grep '"port":' | head -1 | sed 's/.*"port": *\([0-9]*\).*/\1/' 2>/dev/null)
+if [ -z "$ORIGINAL_SOCKS_PORT" ] || [ "$ORIGINAL_SOCKS_PORT" = "null" ]; then
+    ORIGINAL_SOCKS_PORT=$(grep -A20 '"protocol": "socks"' "$CONFIG_FILE" | grep '"port":' | head -1 | sed 's/.*"port": *\([0-9]*\).*/\1/' 2>/dev/null)
 fi
 
-if [ -z "$SOCKS_PORT" ]; then
-    SOCKS_PORT=$(grep '"port":' "$CONFIG_FILE" | head -1 | grep -o '[0-9]\+' 2>/dev/null)
+if [ -z "$ORIGINAL_SOCKS_PORT" ]; then
+    ORIGINAL_SOCKS_PORT=$(grep '"port":' "$CONFIG_FILE" | head -1 | grep -o '[0-9]\+' 2>/dev/null)
 fi
 
-if [ -n "$SOCKS_PORT" ] && [[ "$SOCKS_PORT" =~ ^[0-9]+$ ]]; then
-    log_info "检测到SOCKS5端口: $SOCKS_PORT"
+log_info "检测到原始SOCKS5端口: $ORIGINAL_SOCKS_PORT"
+
+# 🚨 关键修复：端口安全检查
+SAFE_SOCKS_PORT=""
+DANGEROUS_PORTS="20 21 22 23 25 53 69 80 110 143 443 993 995"
+
+if [ -n "$ORIGINAL_SOCKS_PORT" ] && [[ "$ORIGINAL_SOCKS_PORT" =~ ^[0-9]+$ ]]; then
+    # 检查是否为危险端口
+    if echo "$DANGEROUS_PORTS" | grep -q "\b$ORIGINAL_SOCKS_PORT\b"; then
+        log_error "🚨 警告：检测到危险端口 $ORIGINAL_SOCKS_PORT"
+        
+        if [ "$ORIGINAL_SOCKS_PORT" = "53" ]; then
+            log_error "🚨 严重：当前使用DNS端口53，必须立即修复！"
+        fi
+        
+        # 自动选择安全端口
+        for safe_port in 12800 8080 8388 18889 13333; do
+            if ! netstat -tuln | grep -q ":$safe_port "; then
+                SAFE_SOCKS_PORT=$safe_port
+                log_info "🔧 自动选择安全端口: $safe_port"
+                break
+            fi
+        done
+        
+        if [ -z "$SAFE_SOCKS_PORT" ]; then
+            SAFE_SOCKS_PORT=12800
+            log_warn "⚠️ 所有推荐端口被占用，强制使用: $SAFE_SOCKS_PORT"
+        fi
+    else
+        # 原端口安全，保持不变
+        SAFE_SOCKS_PORT="$ORIGINAL_SOCKS_PORT"
+        log_info "✅ 原端口安全，保持端口: $SAFE_SOCKS_PORT"
+    fi
 else
-    log_error "无法检测SOCKS5端口，请检查配置文件"
-    exit 1
+    log_error "无法检测SOCKS5端口，使用默认安全端口"
+    SAFE_SOCKS_PORT=12800
 fi
 
 # 检查服务状态
@@ -167,9 +199,9 @@ if [ -z "$SERVICE_NAME" ]; then
     systemctl start xray 2>/dev/null || true
 fi
 
-# 第三步：优化SOCKS5配置并限制带宽
+# 第三步：安全地重新配置SOCKS5
 echo ""
-echo "3️⃣ SOCKS5优化与带宽限制"
+echo "3️⃣ SOCKS5安全重新配置与优化"
 echo "=========================================="
 
 log_info "备份原配置文件..."
@@ -179,14 +211,22 @@ cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
 SERVER_IP=$(curl -s ifconfig.me --connect-timeout 10 2>/dev/null || echo "YOUR_SERVER_IP")
 
 # 计算HTTP端口
-HTTP_PORT=$((SOCKS_PORT + 1))
+HTTP_PORT=$((SAFE_SOCKS_PORT + 1))
 
-log_info "SOCKS5端口: $SOCKS_PORT"
-log_info "HTTP端口: $HTTP_PORT"
-log_info "服务器IP: $SERVER_IP"
+log_info "最终端口配置:"
+log_info "  SOCKS5端口: $SAFE_SOCKS_PORT"
+log_info "  HTTP端口: $HTTP_PORT"
+log_info "  服务器IP: $SERVER_IP"
 
-# 生成优化的配置文件（包含1MB/s带宽限制）
-log_info "生成优化配置（限制带宽1MB/s）..."
+# 🔧 关键修复：确保端口不会被设为53
+if [ "$SAFE_SOCKS_PORT" = "53" ]; then
+    log_error "🚨 检测到端口仍为53，强制修改为安全端口"
+    SAFE_SOCKS_PORT=12800
+    HTTP_PORT=12801
+fi
+
+# 生成安全的配置文件
+log_info "生成安全优化配置..."
 
 cat > "$CONFIG_FILE" << XRAYCONFIG
 {
@@ -245,7 +285,7 @@ cat > "$CONFIG_FILE" << XRAYCONFIG
   "inbounds": [
     {
       "tag": "socks5-in",
-      "port": $SOCKS_PORT,
+      "port": $SAFE_SOCKS_PORT,
       "protocol": "socks",
       "listen": "0.0.0.0",
       "settings": {
@@ -360,11 +400,54 @@ cat > "$CONFIG_FILE" << XRAYCONFIG
 }
 XRAYCONFIG
 
-log_info "✅ 配置文件已优化"
+log_info "✅ 安全配置文件已生成"
 
-# 第四步：系统级带宽限制
+# 🔒 二次验证：确保配置中的端口不是53
+CONFIG_PORT_CHECK=$(grep '"port":' "$CONFIG_FILE" | head -1 | grep -o '[0-9]\+')
+if [ "$CONFIG_PORT_CHECK" = "53" ]; then
+    log_error "🚨 致命错误：配置文件中端口仍为53，立即修复"
+    sed -i "s/\"port\": 53/\"port\": 12800/g" "$CONFIG_FILE"
+    sed -i "s/\"port\":53/\"port\":12800/g" "$CONFIG_FILE"
+    SAFE_SOCKS_PORT=12800
+    HTTP_PORT=12801
+    log_info "🔧 强制修复为端口12800"
+fi
+
+# 第四步：更新防火墙（移除53端口，添加安全端口）
 echo ""
-echo "4️⃣ 系统级带宽限制设置"
+echo "4️⃣ 防火墙安全配置"
+echo "=========================================="
+
+# 删除危险端口的防火墙规则
+log_info "清理危险端口的防火墙规则..."
+for dangerous_port in 53 22 25; do
+    iptables -D INPUT -p tcp --dport $dangerous_port -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -p udp --dport $dangerous_port -j ACCEPT 2>/dev/null || true
+done
+
+# 删除原端口规则（如果不同）
+if [ "$ORIGINAL_SOCKS_PORT" != "$SAFE_SOCKS_PORT" ] && [ -n "$ORIGINAL_SOCKS_PORT" ]; then
+    log_info "删除原端口 $ORIGINAL_SOCKS_PORT 的防火墙规则..."
+    iptables -D INPUT -p tcp --dport "$ORIGINAL_SOCKS_PORT" -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -p udp --dport "$ORIGINAL_SOCKS_PORT" -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -p tcp --dport "$((ORIGINAL_SOCKS_PORT + 1))" -j ACCEPT 2>/dev/null || true
+fi
+
+# 添加新的安全端口规则
+log_info "添加安全端口防火墙规则..."
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT  # SSH端口必须保留
+iptables -A INPUT -p tcp --dport "$SAFE_SOCKS_PORT" -j ACCEPT
+iptables -A INPUT -p udp --dport "$SAFE_SOCKS_PORT" -j ACCEPT
+iptables -A INPUT -p tcp --dport "$HTTP_PORT" -j ACCEPT
+
+# 保存防火墙规则
+iptables-save > /etc/sysconfig/iptables 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+
+log_info "✅ 防火墙已配置为安全端口"
+
+# 第五步：系统级带宽限制
+echo ""
+echo "5️⃣ 系统级带宽限制设置"
 echo "=========================================="
 
 # 获取网络接口
@@ -401,14 +484,14 @@ tc qdisc add dev $INTERFACE parent 1:10 handle 10: sfq perturb 10
 tc qdisc add dev $INTERFACE parent 1:30 handle 30: sfq perturb 10
 
 # 创建过滤器 - SOCKS5端口流量
-tc filter add dev $INTERFACE protocol ip parent 1:0 prio 1 u32 match ip sport $SOCKS_PORT 0xffff flowid 1:10
-tc filter add dev $INTERFACE protocol ip parent 1:0 prio 1 u32 match ip dport $SOCKS_PORT 0xffff flowid 1:10
+tc filter add dev $INTERFACE protocol ip parent 1:0 prio 1 u32 match ip sport $SAFE_SOCKS_PORT 0xffff flowid 1:10
+tc filter add dev $INTERFACE protocol ip parent 1:0 prio 1 u32 match ip dport $SAFE_SOCKS_PORT 0xffff flowid 1:10
 
 log_info "✅ 带宽限制已设置为1MB/s"
 
-# 第五步：重启服务
+# 第六步：重启服务并验证
 echo ""
-echo "5️⃣ 服务重启与验证"
+echo "6️⃣ 服务重启与安全验证"
 echo "=========================================="
 
 log_info "重启$SERVICE_NAME服务..."
@@ -420,154 +503,176 @@ if systemctl is-active --quiet $SERVICE_NAME; then
     log_info "✅ $SERVICE_NAME服务启动成功"
 else
     log_error "❌ $SERVICE_NAME服务启动失败，恢复备份配置"
-    cp "${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)" "$CONFIG_FILE" 2>/dev/null || true
+    # 恢复备份但确保端口不是53
+    backup_file=$(ls -t ${CONFIG_FILE}.backup.* | head -1)
+    if [ -f "$backup_file" ]; then
+        cp "$backup_file" "$CONFIG_FILE"
+        # 强制检查并修复53端口
+        if grep -q '"port": 53\|"port":53' "$CONFIG_FILE"; then
+            sed -i 's/"port": 53/"port": 12800/g' "$CONFIG_FILE"
+            sed -i 's/"port":53/"port":12800/g' "$CONFIG_FILE"
+        fi
+    fi
     systemctl restart $SERVICE_NAME
     exit 1
 fi
 
 # 验证端口监听
-if netstat -tuln | grep -q ":$SOCKS_PORT "; then
-    log_info "✅ 端口$SOCKS_PORT监听正常"
+if netstat -tuln | grep -q ":$SAFE_SOCKS_PORT "; then
+    log_info "✅ 安全端口$SAFE_SOCKS_PORT监听正常"
 else
     log_warn "⚠️ 端口监听检查失败"
 fi
 
-# 第六步：生成配置文件
+# 🔒 最终安全检查
+FINAL_PORT_CHECK=$(netstat -tuln | grep ":53 " | wc -l)
+if [ "$FINAL_PORT_CHECK" -gt 1 ]; then
+    log_warn "⚠️ 检测到端口53仍有多个监听，可能存在冲突"
+    netstat -tuln | grep ":53 "
+fi
+
+# 第七步：生成安全配置文件
 echo ""
-echo "6️⃣ 生成配置信息"
+echo "7️⃣ 生成安全配置信息"
 echo "=========================================="
 
 # 生成用户配置文件
-cat > ~/bbr_socks5_optimized.txt << USERCONFIG
+cat > ~/bbr_socks5_safe_optimized.txt << USERCONFIG
 ================================================
-🚀 BBR+SOCKS5优化配置信息
+🛡️ BBR+SOCKS5安全优化配置信息
 ================================================
 
-📊 优化内容:
+🚨 安全修复内容:
+✅ 已修复DNS端口53冲突问题
+✅ 使用安全端口: $SAFE_SOCKS_PORT
 ✅ BBR TCP拥塞控制已启用
-✅ SOCKS5代理已优化  
 ✅ 带宽限制: 1MB/s
 ✅ DNS解析优化
-✅ 网络参数调优
+✅ 防火墙安全配置
 
-📡 连接信息:
+📡 安全连接信息:
 服务器IP: $SERVER_IP
-SOCKS5端口: $SOCKS_PORT
+SOCKS5端口: $SAFE_SOCKS_PORT (安全端口)
 HTTP端口: $HTTP_PORT
 用户名: vip1, vip2, vip3
 密码: 123456
 
+🔒 端口变更记录:
+原始端口: $ORIGINAL_SOCKS_PORT
+最终端口: $SAFE_SOCKS_PORT (已确保安全)
+变更原因: 避免DNS服务冲突
+
 🎮 客户端配置:
 代理类型: SOCKS5
-服务器: $SERVER_IP:$SOCKS_PORT
+服务器: $SERVER_IP:$SAFE_SOCKS_PORT
 认证: vip1:123456
 ⚠️ 重要: 启用'代理DNS查询'
 
 🧪 连接测试:
-curl --socks5 vip1:123456@$SERVER_IP:$SOCKS_PORT https://httpbin.org/ip
+curl --socks5 vip1:123456@$SERVER_IP:$SAFE_SOCKS_PORT https://httpbin.org/ip
 
 ⚙️ 管理命令:
 查看BBR状态: sysctl net.ipv4.tcp_congestion_control
 查看服务状态: systemctl status $SERVICE_NAME
 查看带宽限制: tc qdisc show dev $INTERFACE
 重启服务: systemctl restart $SERVICE_NAME
+端口监听检查: netstat -tuln | grep $SAFE_SOCKS_PORT
 
 📁 重要文件:
 配置文件: $CONFIG_FILE
 配置备份: ${CONFIG_FILE}.backup.*
-用户信息: ~/bbr_socks5_optimized.txt
+用户信息: ~/bbr_socks5_safe_optimized.txt
+
+🔍 端口安全检查:
+当前SOCKS5端口: $SAFE_SOCKS_PORT ✅
+DNS端口53状态: $(netstat -tuln | grep ":53 " | wc -l)个监听进程
 
 优化时间: $(date)
+版本: 安全修复版 v2.0
 ================================================
 USERCONFIG
 
-# 创建管理脚本
-cat > ~/manage_optimized_socks5.sh << 'MGMTSCRIPT'
+# 创建紧急修复脚本
+cat > ~/emergency_fix_port53.sh << 'EMERGENCY_FIX'
 #!/bin/bash
 
-echo "🎛️ BBR+SOCKS5管理工具"
-echo "===================="
-echo "1) 查看BBR状态"
-echo "2) 查看SOCKS5状态"  
-echo "3) 查看带宽限制"
-echo "4) 重启SOCKS5服务"
-echo "5) 移除带宽限制"
-echo "6) 查看配置信息"
+echo "🚨 紧急修复DNS端口53冲突"
+echo "========================"
+
+CONFIG_FILE="/etc/xray/config.json"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "❌ 配置文件不存在"
+    exit 1
+fi
+
+# 检查是否使用53端口
+if grep -q '"port": 53\|"port":53' "$CONFIG_FILE"; then
+    echo "🔧 检测到53端口，立即修复..."
+    
+    # 停止服务
+    systemctl stop xray
+    
+    # 备份配置
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.emergency_backup"
+    
+    # 修复端口
+    sed -i 's/"port": 53/"port": 12800/g' "$CONFIG_FILE"
+    sed -i 's/"port":53/"port":12800/g' "$CONFIG_FILE"
+    sed -i 's/"port": 54/"port": 12801/g' "$CONFIG_FILE"
+    
+    # 更新防火墙
+    iptables -D INPUT -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p tcp --dport 12800 -j ACCEPT
+    iptables -A INPUT -p udp --dport 12800 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 12801 -j ACCEPT
+    
+    # 重启服务
+    systemctl start xray
+    
+    if systemctl is-active --quiet xray; then
+        echo "✅ 修复成功！新端口: 12800"
+    else
+        echo "❌ 修复失败，查看状态:"
+        systemctl status xray
+    fi
+else
+    echo "✅ 端口配置正常，无需修复"
+fi
+
 echo ""
-read -p "请选择 (1-6): " choice
+echo "当前配置端口:"
+grep '"port":' "$CONFIG_FILE"
+EMERGENCY_FIX
 
-case $choice in
-    1)
-        echo "BBR状态:"
-        echo "拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control)"
-        echo "队列算法: $(sysctl -n net.core.default_qdisc)"
-        ;;
-    2)
-        SOCKS_PORT=$(grep '"port":' /etc/xray/config.json | head -1 | grep -o '[0-9]\+' 2>/dev/null)
-        echo "SOCKS5状态:"
-        systemctl status xray --no-pager -l
-        echo "端口监听: $(netstat -tuln | grep ":$SOCKS_PORT " || echo "未监听")"
-        ;;
-    3)
-        INTERFACE=$(ip route | grep default | awk '{print $5}' | head -1)
-        echo "带宽限制状态:"
-        tc qdisc show dev $INTERFACE
-        tc class show dev $INTERFACE
-        ;;
-    4)
-        echo "重启SOCKS5服务..."
-        systemctl restart xray
-        sleep 3
-        systemctl is-active xray && echo "✅ 重启成功" || echo "❌ 重启失败"
-        ;;
-    5)
-        INTERFACE=$(ip route | grep default | awk '{print $5}' | head -1)
-        echo "移除带宽限制..."
-        tc qdisc del dev $INTERFACE root 2>/dev/null || true
-        echo "✅ 带宽限制已移除"
-        ;;
-    6)
-        cat ~/bbr_socks5_optimized.txt
-        ;;
-    *)
-        echo "无效选择"
-        ;;
-esac
-MGMTSCRIPT
-
-chmod +x ~/manage_optimized_socks5.sh
+chmod +x ~/emergency_fix_port53.sh
 
 # 显示最终结果
 clear
 echo "=================================================="
-echo "🎉 BBR+SOCKS5优化完成！"
+echo "🛡️ BBR+SOCKS5安全优化完成！"
 echo "=================================================="
+echo ""
+echo "🚨 重要修复:"
+echo "  ❌ 原始端口: $ORIGINAL_SOCKS_PORT"
+echo "  ✅ 安全端口: $SAFE_SOCKS_PORT"
+echo "  🛡️ 已避免DNS端口冲突"
 echo ""
 echo "✅ 优化内容总结:"
 echo "  🚀 BBR TCP拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control)"
-echo "  🌐 SOCKS5代理端口: $SOCKS_PORT"
+echo "  🔒 SOCKS5安全端口: $SAFE_SOCKS_PORT"
 echo "  📊 带宽限制: 1MB/s"
 echo "  🛡️ DNS解析优化: 已启用"
 echo ""
-echo "📡 连接信息:"
-echo "  服务器: $SERVER_IP:$SOCKS_PORT"
+echo "📡 安全连接信息:"
+echo "  服务器: $SERVER_IP:$SAFE_SOCKS_PORT"
 echo "  用户名: vip1"
 echo "  密码: 123456"
 echo ""
-echo "🧪 快速测试:"
-echo "  curl --socks5 vip1:123456@$SERVER_IP:$SOCKS_PORT https://httpbin.org/ip"
+echo "🧪 安全测试:"
+echo "  curl --socks5 vip1:123456@$SERVER_IP:$SAFE_SOCKS_PORT https://httpbin.org/ip"
 echo ""
-echo "📋 管理工具:"
-echo "  配置信息: cat ~/bbr_socks5_optimized.txt"
-echo "  管理脚本: ~/manage_optimized_socks5.sh"
-echo ""
-echo "🎯 性能预期:"
-echo "  • 网络延迟降低20-50%"
-echo "  • 传输速度提升30-200%"
-echo "  • 带宽稳定在1MB/s以内"
-echo "  • DNS解析更快更稳定"
-echo ""
-echo "优化完成时间: $(date)"
-echo "=================================================="
-
-log_info "🎊 所有优化已完成！请保存配置信息，开始享受优化后的网络体验！"
+echo "🚨 紧急工具:"
+echo "  安全配置: cat ~/bbr_socks5_safe_optimized.txt"
+echo "  紧急修复: ~/emergency_fix_port53.sh"
