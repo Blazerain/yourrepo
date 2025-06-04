@@ -3,8 +3,8 @@
 # SOCKS5 环境自动安装脚本 - 修复版
 # 修复执行中断问题
 # 使用方法: 
-# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash -s 1080
-# 或: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | PORT=1080 bash
+# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | bash -s 1888
+# 或: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/install.sh | PORT=1888 bash
 # cat ~/Sk5_User_Password.txt 配置信息
 set -e
 
