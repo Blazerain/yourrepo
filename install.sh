@@ -605,19 +605,19 @@ fi
 
 echo \"\"
 echo \"🔧 代理测试:\"
-if systemctl is-active --quiet xray; then
-    SOCKS_PORT=\$(/usr/local/bin/get_socks5_port.sh)
-    echo \"通过SOCKS5代理(\$SOCKS_PORT)测试:\"
+# if systemctl is-active --quiet xray; then
+#     SOCKS_PORT=\$(/usr/local/bin/get_socks5_port.sh)
+#     echo \"通过SOCKS5代理(\$SOCKS_PORT)测试:\"
     
-    for domain in \"bfweb.hk.beanfun.com\" \"cdn.hk.beanfun.com\"; do
-        echo -n \"  \$domain: \"
-        if timeout 10 curl --socks5-hostname vip1:123456@127.0.0.1:\$SOCKS_PORT -s https://\$domain >/dev/null 2>&1; then
-            echo \"✅ 成功\"
-        else
-            echo \"❌ 失败\"
-        fi
-    done
-fi
+#     for domain in \"bfweb.hk.beanfun.com\" \"cdn.hk.beanfun.com\"; do
+#         echo -n \"  \$domain: \"
+#         if timeout 10 curl --socks5-hostname vip1:123456@127.0.0.1:\$SOCKS_PORT -s https://\$domain >/dev/null 2>&1; then
+#             echo \"✅ 成功\"
+#         else
+#             echo \"❌ 失败\"
+#         fi
+#     done
+# fi
 DNSTESTSCRIPT" "创建DNS测试脚本"
 
 safe_execute "sudo chmod +x /usr/local/bin/beanfun-dns-test.sh" "设置DNS测试脚本权限"
