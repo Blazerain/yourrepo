@@ -3,7 +3,7 @@
 #=================================================
 # 轻量级SSR多IP配置脚本 - 512M内存优化版
 # 适用于阿里云轻量应用服务器
-# 一键部署命令: curl -sSL https://raw.githubusercontent.com/yourusername/ssr-multi-ip/main/ss_ali.sh | bash
+# 一键部署命令: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss_ali.sh | bash
 #=================================================
 
 set -e
@@ -17,7 +17,7 @@ PUBLIC_IPS=(
 )
 
 # 端口配置 (从8388开始)
-BASE_PORT=8388
+BASE_PORT=13000
 
 # SSR配置
 ENCRYPTION_METHOD="aes-256-gcm"
