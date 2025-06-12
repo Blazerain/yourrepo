@@ -3,7 +3,7 @@
 # 多公网IP服务器SOCKS5代理一键安装脚本
 # 适用于阿里云多公网IP型规格族
 # 每个公网IP独立代理服务，支持账号隔离和流量分离
-# 使用方法: curl -sSL https://raw.githubusercontent.com/你的用户名/你的仓库名/main/multi_ip_install.sh | bash
+# 使用方法: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/multi_ip_install.sh | bash
 
 set -e
 
