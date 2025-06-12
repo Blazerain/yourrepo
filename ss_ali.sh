@@ -1,8 +1,10 @@
+# 多公网IP SSR一键配置脚本
+# 用途：游戏加速器
+# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss_ali.sh| bash
 #!/bin/bash
 
 # 多公网IP SSR一键配置脚本
 # 用途：游戏加速器
-# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss_ali.sh| bash
 
 set -e
 
@@ -92,19 +94,73 @@ is_public_ip() {
     fi
 }
 
+# 检查并创建swap
+setup_swap() {
+    local swap_size="2048"  # 2GB
+    
+    # 检查是否已有swap
+    if [[ $(swapon --show | wc -l) -eq 0 ]]; then
+        log_info "创建swap分区以避免内存不足..."
+        
+        # 检查磁盘空间
+        available_space=$(df / | awk 'NR==2 {print int($4/1024)}')
+        if [[ $available_space -lt $swap_size ]]; then
+            swap_size=$((available_space / 2))
+            log_warn "磁盘空间不足，创建${swap_size}MB swap"
+        fi
+        
+        # 创建swap文件
+        dd if=/dev/zero of=/swapfile bs=1M count=$swap_size status=progress
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        
+        # 永久启用
+        if ! grep -q '/swapfile' /etc/fstab; then
+            echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+        fi
+        
+        log_info "Swap创建完成: ${swap_size}MB"
+    else
+        log_info "已存在swap分区"
+    fi
+}
+
 # 安装依赖
 install_dependencies() {
     log_info "安装必要依赖..."
     
-    # 检测系统类型
+    # 设置swap以避免内存不足
+    setup_swap
+    
+    # 清理缓存
+    log_info "清理系统缓存..."
     if command -v yum >/dev/null 2>&1; then
-        # CentOS/RHEL
-        yum update -y
-        yum install -y wget curl git python3 python3-pip
+        yum clean all
+    elif command -v apt >/dev/null 2>&1; then
+        apt clean
+    fi
+    
+    # 检测系统类型并安装最小依赖
+    if command -v yum >/dev/null 2>&1; then
+        # CentOS/RHEL - 避免全量更新，只安装必需包
+        log_info "安装基础依赖包..."
+        yum install -y wget curl git python3 --skip-broken
+        
+        # 如果python3不可用，尝试安装python
+        if ! command -v python3 >/dev/null 2>&1; then
+            if command -v python >/dev/null 2>&1; then
+                ln -sf /usr/bin/python /usr/bin/python3
+            else
+                yum install -y python --skip-broken
+                ln -sf /usr/bin/python /usr/bin/python3
+            fi
+        fi
+        
     elif command -v apt >/dev/null 2>&1; then
         # Ubuntu/Debian
         apt update
-        apt install -y wget curl git python3 python3-pip
+        apt install -y wget curl git python3 python3-pip --no-install-recommends
     else
         log_error "不支持的系统类型"
         exit 1
@@ -114,7 +170,18 @@ install_dependencies() {
     if [[ ! -d "/usr/local/shadowsocksr" ]]; then
         log_info "下载ShadowsocksR..."
         cd /usr/local
-        git clone -b manyuser https://github.com/shadowsocksrr/shadowsocksr.git
+        
+        # 使用更稳定的源
+        if git clone -b manyuser https://github.com/shadowsocksrr/shadowsocksr.git 2>/dev/null; then
+            log_info "从GitHub下载成功"
+        else
+            log_warn "GitHub下载失败，尝试备用源..."
+            git clone -b manyuser https://gitee.com/mirrors/shadowsocksr.git shadowsocksr || {
+                log_error "下载ShadowsocksR失败"
+                exit 1
+            }
+        fi
+        
         cd shadowsocksr
         chmod +x *.sh
     fi
