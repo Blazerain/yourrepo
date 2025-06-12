@@ -2,6 +2,7 @@
 
 # 多公网IP SSR一键配置脚本
 # 用途：游戏加速器
+curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss_ali.sh| bash
 
 set -e
 
