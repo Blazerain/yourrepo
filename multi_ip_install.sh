@@ -220,7 +220,8 @@ for interface in "${!IP_CONFIG[@]}"; do
     echo "🔧 配置 $interface ($ip) - 端口: $socks_port/$http_port - 用户: ${user_prefix}user"
     
     # 创建独立配置文件
-    sudo tee "/etc/xray-multi/config_${interface//:/_}.json" > /dev/null << XRAYCONFIG
+    config_file="/etc/xray-multi/config_${interface//:/_}.json"
+    sudo tee "$config_file" > /dev/null << XRAYCONFIG
 {
   "log": {
     "loglevel": "info",
@@ -303,11 +304,6 @@ for interface in "${!IP_CONFIG[@]}"; do
       "settings": {
         "domainStrategy": "UseIPv4",
         "userLevel": 0
-      },
-      "streamSettings": {
-        "sockopt": {
-          "bindToDevice": "${interface%%:*}"
-        }
       }
     },
     {
@@ -345,7 +341,17 @@ for interface in "${!IP_CONFIG[@]}"; do
 }
 XRAYCONFIG
 
-    echo "✅ 配置文件创建: /etc/xray-multi/config_${interface//:/_}.json"
+    echo "✅ 配置文件创建: $config_file"
+    
+    # 验证配置文件语法
+    echo "🔍 验证配置文件语法..."
+    if /usr/local/bin/xray test -config "$config_file" >/dev/null 2>&1; then
+        echo "✅ 配置文件语法正确: $interface"
+    else
+        echo "❌ 配置文件语法错误: $interface"
+        echo "   尝试直接测试: sudo /usr/local/bin/xray test -config $config_file"
+    fi
+    
     config_index=$((config_index + 1))
 done
 
@@ -388,17 +394,23 @@ STARTSCRIPT
 sudo tee /usr/local/bin/xray-multi-stop.sh > /dev/null << 'STOPSCRIPT'
 #!/bin/bash
 
+PID_FILE="/var/run/xray-multi.pid"
+
 echo "停止多IP代理服务..."
 
-if [ -f /var/run/xray-multi.pid ]; then
+# 方法1: 通过PID文件停止
+stopped_count=0
+if [ -f "$PID_FILE" ]; then
     while read -r pid; do
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             echo "停止进程: $pid"
             kill -TERM "$pid" 2>/dev/null || true
+            stopped_count=$((stopped_count + 1))
         fi
-    done < /var/run/xray-multi.pid
+    done < "$PID_FILE"
     
-    sleep 3
+    # 等待进程正常退出
+    sleep 5
     
     # 强制杀死残留进程
     while read -r pid; do
@@ -406,15 +418,42 @@ if [ -f /var/run/xray-multi.pid ]; then
             echo "强制停止进程: $pid"
             kill -KILL "$pid" 2>/dev/null || true
         fi
-    done < /var/run/xray-multi.pid
+    done < "$PID_FILE"
     
-    rm -f /var/run/xray-multi.pid
+    rm -f "$PID_FILE"
 fi
 
-# 清理任何残留的xray进程
-pkill -f "/usr/local/bin/xray run -config /etc/xray-multi" 2>/dev/null || true
+# 方法2: 通过进程名清理所有xray-multi相关进程
+xray_pids=$(pgrep -f "/usr/local/bin/xray run -config /etc/xray-multi" 2>/dev/null || true)
+if [ -n "$xray_pids" ]; then
+    echo "清理残留的xray进程..."
+    for pid in $xray_pids; do
+        echo "清理进程: $pid"
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    
+    sleep 3
+    
+    # 强制清理
+    xray_pids=$(pgrep -f "/usr/local/bin/xray run -config /etc/xray-multi" 2>/dev/null || true)
+    if [ -n "$xray_pids" ]; then
+        for pid in $xray_pids; do
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+    fi
+fi
 
-echo "停止完成"
+echo "✅ 停止完成"
+
+# 验证是否真的停止了
+remaining=$(pgrep -f "/usr/local/bin/xray run -config /etc/xray-multi" 2>/dev/null | wc -l)
+if [ "$remaining" -eq 0 ]; then
+    echo "✅ 所有进程已停止"
+    exit 0
+else
+    echo "⚠️ 仍有 $remaining 个进程未停止"
+    exit 1
+fi
 STOPSCRIPT
 
 sudo chmod +x /usr/local/bin/xray-multi-start.sh
@@ -427,17 +466,20 @@ safe_execute "sudo tee /etc/systemd/system/xray-multi.service > /dev/null << 'SY
 Description=Xray Multi-IP Service
 Documentation=https://github.com/xtls/xray-core
 After=network.target nss-lookup.target
+Wants=network.target
 
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=yes
 User=root
 ExecStart=/usr/local/bin/xray-multi-start.sh
 ExecStop=/usr/local/bin/xray-multi-stop.sh
-Restart=on-failure
-RestartPreventExitStatus=23
+TimeoutStartSec=60
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
 LimitNPROC=10000
 LimitNOFILE=1000000
-PIDFile=/var/run/xray-multi.pid
 
 [Install]
 WantedBy=multi-user.target
@@ -528,7 +570,68 @@ echo "=========================================="
 
 safe_execute "sudo systemctl daemon-reload" "重新加载systemd"
 safe_execute "sudo systemctl enable xray-multi" "启用xray-multi服务"
-safe_execute "sudo systemctl start xray-multi" "启动xray-multi服务"
+
+# 在启动systemd服务之前，先手动测试
+echo "🧪 手动测试启动脚本..."
+echo "执行: sudo /usr/local/bin/xray-multi-start.sh"
+
+if sudo /usr/local/bin/xray-multi-start.sh; then
+    echo "✅ 手动启动测试成功"
+    
+    # 停止手动启动的进程
+    sudo /usr/local/bin/xray-multi-stop.sh
+    
+    sleep 3
+    
+    # 通过systemd启动
+    echo "🔄 通过systemd启动服务..."
+    if sudo systemctl start xray-multi; then
+        echo "✅ systemd服务启动成功"
+    else
+        echo "❌ systemd服务启动失败，查看状态:"
+        sudo systemctl status xray-multi --no-pager -l || true
+        echo ""
+        echo "查看日志:"
+        sudo journalctl -u xray-multi -n 20 --no-pager || true
+        
+        echo ""
+        echo "🔧 尝试手动启动进行调试："
+        echo "sudo /usr/local/bin/xray-multi-start.sh"
+        echo ""
+        echo "查看详细日志："
+        echo "sudo journalctl -u xray-multi -f"
+    fi
+else
+    echo "❌ 手动启动测试失败"
+    echo ""
+    echo "🔍 调试步骤："
+    echo "1. 检查配置文件："
+    echo "   ls -la /etc/xray-multi/"
+    echo ""
+    echo "2. 测试单个配置文件："
+    echo "   sudo /usr/local/bin/xray test -config /etc/xray-multi/config_eth0.json"
+    echo ""
+    echo "3. 手动启动单个实例测试："
+    echo "   sudo /usr/local/bin/xray run -config /etc/xray-multi/config_eth0.json"
+    echo ""
+    echo "4. 检查端口占用："
+    echo "   sudo netstat -tlnp | grep -E '(10000|10010|10020)'"
+    
+    # 不要退出，继续尝试systemd启动
+    echo ""
+    echo "⚠️ 仍然尝试通过systemd启动..."
+    if ! sudo systemctl start xray-multi; then
+        echo "❌ systemd服务也启动失败"
+        echo ""
+        echo "请运行以下命令进行调试："
+        echo "sudo journalctl -u xray-multi -n 50"
+        echo "sudo systemctl status xray-multi"
+        
+        # 不要error_exit，让脚本继续执行显示配置信息
+        echo ""
+        echo "⚠️ 服务启动失败，但继续生成配置文件供调试使用"
+    fi
+fi
 
 # 获取服务器IP
 echo "获取服务器公网IP地址..."
