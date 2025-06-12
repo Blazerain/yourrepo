@@ -3,14 +3,7 @@
 # 多公网IP型服务器路由配置脚本
 # 用途：配置每个网卡的入出流量都走自己的网卡
 # 适用于阿里云多公网IP型规格族
-# 下载并运行
 # curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/setup_routes.sh | sudo bash
-
-
-# 多公网IP型服务器路由配置脚本
-# 用途：配置每个网卡的入出流量都走自己的网卡
-# 适用于阿里云多公网IP型规格族
-
 set -e
 
 echo "=========================================="
@@ -43,14 +36,31 @@ get_gateway() {
 
 # 检测当前网卡配置
 echo "正在检测当前网卡配置..."
-eth0_ip=$(ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1 || echo "")
-eth1_ip=$(ip addr show eth1 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1 || echo "")
-eth1_1_ip=$(ip addr show eth1:1 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1 || echo "")
 
-# 特殊处理：如果eth1:1没有独立IP，尝试从ifconfig获取
-if [[ -z "$eth1_1_ip" ]] || [[ "$eth1_1_ip" == "$eth1_ip" ]]; then
-    eth1_1_ip=$(ifconfig eth1:1 2>/dev/null | grep 'inet ' | awk '{print $2}' || echo "")
-fi
+# 更可靠的IP获取方法
+get_interface_ip() {
+    local interface=$1
+    local ip
+    
+    # 先尝试ifconfig（对虚拟接口更准确）
+    if command -v ifconfig >/dev/null 2>&1; then
+        ip=$(ifconfig "$interface" 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+    fi
+    
+    # 如果ifconfig失败，尝试ip命令
+    if [[ -z "$ip" ]]; then
+        ip=$(ip addr show "$interface" 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -1)
+    fi
+    
+    # 清理可能的空格和换行符
+    ip=$(echo "$ip" | tr -d ' \n\r\t')
+    
+    echo "$ip"
+}
+
+eth0_ip=$(get_interface_ip "eth0")
+eth1_ip=$(get_interface_ip "eth1")  
+eth1_1_ip=$(get_interface_ip "eth1:1")
 
 echo "检测到的网卡配置："
 [[ -n "$eth0_ip" ]] && echo "  eth0: $eth0_ip"
