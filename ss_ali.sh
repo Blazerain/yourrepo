@@ -1,218 +1,168 @@
-# 多公网IP SSR一键配置脚本
-# 用途：游戏加速器
-# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss_ali.sh| bash
 #!/bin/bash
 
-# 多公网IP SSR一键配置脚本
-# 用途：游戏加速器
+#=================================================
+# 轻量级SSR多IP配置脚本 - 512M内存优化版
+# 适用于阿里云轻量应用服务器
+# 一键部署命令: curl -sSL https://raw.githubusercontent.com/yourusername/ssr-multi-ip/main/install.sh | bash
+#=================================================
 
 set -e
+
+# =============配置区域 - 可修改=============
+# 公网IP配置 (根据实际情况修改)
+PUBLIC_IPS=(
+    "47.242.187.120"
+    "47.243.52.144" 
+    "8.218.111.82"
+)
+
+# 端口配置 (从8388开始)
+BASE_PORT=8388
+
+# SSR配置
+ENCRYPTION_METHOD="aes-256-gcm"
+PROTOCOL="origin"
+OBFS="plain"
+
+# 默认密码 (建议修改)
+DEFAULT_PASSWORD="Game2025Acc"
+# ==========================================
 
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # 日志函数
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 检查是否为root用户
+# 检查root权限
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        log_error "请使用root权限运行此脚本"
+        log_error "请使用root权限运行: sudo bash"
         exit 1
     fi
 }
 
-# 获取所有公网IP
-get_public_ips() {
-    log_info "正在检测公网IP地址..."
+# 检查内存
+check_memory() {
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    log_info "服务器内存: ${mem_total}MB"
     
-    declare -a public_ips=()
-    
-    # 方法1: 通过网络接口获取IP
-    for interface in $(ip link show | grep -E '^[0-9]+:' | awk -F': ' '{print $2}' | grep -E '^eth[0-9]+$'); do
-        ip_addr=$(ip addr show $interface | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1)
-        if [[ -n "$ip_addr" && "$ip_addr" != "127.0.0.1" ]]; then
-            # 检查是否为公网IP
-            if is_public_ip "$ip_addr"; then
-                public_ips+=("$ip_addr")
-                log_info "接口 $interface: $ip_addr (公网IP)"
-            else
-                log_warn "接口 $interface: $ip_addr (私网IP)"
-            fi
-        fi
-    done
-    
-    # 方法2: 通过外部服务获取公网IP（备用）
-    if [[ ${#public_ips[@]} -eq 0 ]]; then
-        log_warn "未通过接口检测到公网IP，尝试外部查询..."
-        external_ip=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null || echo "")
-        if [[ -n "$external_ip" ]]; then
-            public_ips+=("$external_ip")
-            log_info "外部查询到公网IP: $external_ip"
-        fi
+    if [[ $mem_total -lt 400 ]]; then
+        log_warn "内存不足400MB，脚本可能失败"
     fi
-    
-    # 输出结果
-    if [[ ${#public_ips[@]} -eq 0 ]]; then
-        log_error "未找到任何公网IP地址"
+}
+
+# 检查系统兼容性
+check_system() {
+    if [[ ! -f /etc/redhat-release ]]; then
+        log_error "此脚本仅支持CentOS/RHEL系统"
         exit 1
     fi
     
-    log_info "共找到 ${#public_ips[@]} 个公网IP:"
-    for i in "${!public_ips[@]}"; do
-        echo "  IP$((i+1)): ${public_ips[i]}"
-    done
-    
-    echo "${public_ips[@]}"
+    local os_version=$(cat /etc/redhat-release)
+    log_info "系统版本: $os_version"
 }
 
-# 判断是否为公网IP
-is_public_ip() {
-    local ip=$1
-    # 私网地址范围
-    if [[ $ip =~ ^10\. ]] || \
-       [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || \
-       [[ $ip =~ ^192\.168\. ]] || \
-       [[ $ip =~ ^127\. ]] || \
-       [[ $ip =~ ^169\.254\. ]]; then
-        return 1  # 私网IP
-    else
-        return 0  # 公网IP
-    fi
-}
-
-# 检查并创建swap
-setup_swap() {
-    local swap_size="2048"  # 2GB
-    
-    # 检查是否已有swap
-    if [[ $(swapon --show | wc -l) -eq 0 ]]; then
-        log_info "创建swap分区以避免内存不足..."
-        
-        # 检查磁盘空间
-        available_space=$(df / | awk 'NR==2 {print int($4/1024)}')
-        if [[ $available_space -lt $swap_size ]]; then
-            swap_size=$((available_space / 2))
-            log_warn "磁盘空间不足，创建${swap_size}MB swap"
-        fi
-        
-        # 创建swap文件
-        dd if=/dev/zero of=/swapfile bs=1M count=$swap_size status=progress
-        chmod 600 /swapfile
-        mkswap /swapfile
-        swapon /swapfile
-        
-        # 永久启用
-        if ! grep -q '/swapfile' /etc/fstab; then
-            echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
-        fi
-        
-        log_info "Swap创建完成: ${swap_size}MB"
-    else
-        log_info "已存在swap分区"
-    fi
-}
-
-# 安装依赖
-install_dependencies() {
-    log_info "安装必要依赖..."
-    
-    # 设置swap以避免内存不足
-    setup_swap
+# 极简依赖安装 - 避免大量下载
+install_minimal_deps() {
+    log_step "安装最小依赖..."
     
     # 清理缓存
-    log_info "清理系统缓存..."
-    if command -v yum >/dev/null 2>&1; then
-        yum clean all
-    elif command -v apt >/dev/null 2>&1; then
-        apt clean
-    fi
+    yum clean all >/dev/null 2>&1
     
-    # 检测系统类型并安装最小依赖
-    if command -v yum >/dev/null 2>&1; then
-        # CentOS/RHEL - 避免全量更新，只安装必需包
-        log_info "安装基础依赖包..."
-        yum install -y wget curl git python3 --skip-broken
-        
-        # 如果python3不可用，尝试安装python
-        if ! command -v python3 >/dev/null 2>&1; then
-            if command -v python >/dev/null 2>&1; then
-                ln -sf /usr/bin/python /usr/bin/python3
-            else
-                yum install -y python --skip-broken
-                ln -sf /usr/bin/python /usr/bin/python3
-            fi
-        fi
-        
-    elif command -v apt >/dev/null 2>&1; then
-        # Ubuntu/Debian
-        apt update
-        apt install -y wget curl git python3 python3-pip --no-install-recommends
-    else
-        log_error "不支持的系统类型"
-        exit 1
-    fi
+    # 只安装绝对必需的包，跳过broken包
+    local packages=("wget" "curl" "unzip")
     
-    # 安装shadowsocksr
-    if [[ ! -d "/usr/local/shadowsocksr" ]]; then
-        log_info "下载ShadowsocksR..."
-        cd /usr/local
-        
-        # 使用更稳定的源
-        if git clone -b manyuser https://github.com/shadowsocksrr/shadowsocksr.git 2>/dev/null; then
-            log_info "从GitHub下载成功"
-        else
-            log_warn "GitHub下载失败，尝试备用源..."
-            git clone -b manyuser https://gitee.com/mirrors/shadowsocksr.git shadowsocksr || {
-                log_error "下载ShadowsocksR失败"
-                exit 1
+    for pkg in "${packages[@]}"; do
+        if ! command -v "$pkg" >/dev/null 2>&1; then
+            log_info "安装 $pkg..."
+            yum install -y "$pkg" --skip-broken >/dev/null 2>&1 || {
+                log_warn "$pkg 安装失败，继续执行..."
             }
         fi
-        
-        cd shadowsocksr
+    done
+    
+    # 检查Python
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_CMD="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_CMD="python"
+    else
+        log_info "安装Python..."
+        yum install -y python --skip-broken >/dev/null 2>&1 || {
+            log_error "Python安装失败"
+            exit 1
+        }
+        PYTHON_CMD="python"
+    fi
+    
+    log_info "使用Python命令: $PYTHON_CMD"
+}
+
+# 下载SSR - 使用轻量级方法
+download_ssr() {
+    log_step "下载ShadowsocksR..."
+    
+    local ssr_dir="/opt/shadowsocksr"
+    
+    if [[ -d "$ssr_dir" ]]; then
+        log_info "SSR已存在，跳过下载"
+        return 0
+    fi
+    
+    # 创建目录
+    mkdir -p "$ssr_dir"
+    cd "$ssr_dir"
+    
+    # 下载预编译版本 (更小更快)
+    log_info "下载轻量级SSR版本..."
+    if wget -q --timeout=30 "https://github.com/shadowsocksrr/shadowsocksr/archive/manyuser.zip" -O ssr.zip; then
+        unzip -q ssr.zip
+        mv shadowsocksr-manyuser/* .
+        rm -rf shadowsocksr-manyuser ssr.zip
         chmod +x *.sh
+        log_info "SSR下载完成"
+    else
+        log_error "下载失败，请检查网络连接"
+        exit 1
     fi
 }
 
 # 生成随机密码
 generate_password() {
-    openssl rand -base64 16 | tr -d "=+/" | cut -c1-16
+    local length=${1:-12}
+    echo "${DEFAULT_PASSWORD}$(date +%H%M)"
 }
 
-# 生成SSR配置
-generate_ssr_config() {
+# 创建SSR配置文件
+create_ssr_config() {
     local ip=$1
     local port=$2
     local password=$3
+    local config_file="/opt/shadowsocksr/config_${port}.json"
     
-    cat > "/usr/local/shadowsocksr/user-config-${port}.json" << EOF
+    cat > "$config_file" << EOF
 {
     "server": "${ip}",
     "server_ipv6": "::",
     "server_port": ${port},
     "local_address": "127.0.0.1",
     "local_port": 1080,
-    
     "password": "${password}",
-    "method": "aes-256-gcm",
-    "protocol": "origin",
+    "method": "${ENCRYPTION_METHOD}",
+    "protocol": "${PROTOCOL}",
     "protocol_param": "",
-    "obfs": "plain",
+    "obfs": "${OBFS}",
     "obfs_param": "",
-    
+    "speed_limit_per_con": 0,
+    "speed_limit_per_user": 0,
     "connect_verbose_info": 0,
     "redirect": "",
     "dns_ipv6": false,
@@ -220,157 +170,198 @@ generate_ssr_config() {
     "workers": 1
 }
 EOF
+    
+    log_info "配置文件创建: $config_file"
 }
 
 # 配置防火墙
-configure_firewall() {
+setup_firewall() {
     local port=$1
     
-    # 检查防火墙类型并配置
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        # firewalld (CentOS 7+)
-        firewall-cmd --permanent --add-port=${port}/tcp
-        firewall-cmd --permanent --add-port=${port}/udp
-        firewall-cmd --reload
-    elif command -v ufw >/dev/null 2>&1; then
-        # ufw (Ubuntu)
-        ufw allow ${port}/tcp
-        ufw allow ${port}/udp
+    log_info "配置防火墙端口: $port"
+    
+    # 检查防火墙服务
+    if systemctl is-active firewalld >/dev/null 2>&1; then
+        # firewalld
+        firewall-cmd --permanent --add-port=${port}/tcp >/dev/null 2>&1
+        firewall-cmd --permanent --add-port=${port}/udp >/dev/null 2>&1
+        firewall-cmd --reload >/dev/null 2>&1
     elif command -v iptables >/dev/null 2>&1; then
         # iptables
-        iptables -I INPUT -p tcp --dport ${port} -j ACCEPT
-        iptables -I INPUT -p udp --dport ${port} -j ACCEPT
-        # 保存iptables规则
-        if command -v service >/dev/null 2>&1; then
-            service iptables save 2>/dev/null || true
-        fi
+        iptables -I INPUT -p tcp --dport ${port} -j ACCEPT 2>/dev/null
+        iptables -I INPUT -p udp --dport ${port} -j ACCEPT 2>/dev/null
+        # 尝试保存
+        service iptables save >/dev/null 2>&1 || true
     fi
 }
 
-# 创建systemd服务
-create_systemd_service() {
+# 创建启动脚本
+create_startup_script() {
     local port=$1
+    local script_file="/opt/shadowsocksr/start_${port}.sh"
     
+    cat > "$script_file" << EOF
+#!/bin/bash
+cd /opt/shadowsocksr
+$PYTHON_CMD shadowsocks/server.py -c config_${port}.json -d start
+EOF
+    
+    chmod +x "$script_file"
+    
+    # 创建systemd服务
     cat > "/etc/systemd/system/ssr-${port}.service" << EOF
 [Unit]
-Description=ShadowsocksR Server on port ${port}
+Description=ShadowsocksR Server Port ${port}
 After=network.target
 
 [Service]
 Type=forking
-PIDFile=/var/run/shadowsocksr-${port}.pid
-ExecStart=/usr/bin/python3 /usr/local/shadowsocksr/shadowsocks/server.py -c /usr/local/shadowsocksr/user-config-${port}.json -d start --pid-file=/var/run/shadowsocksr-${port}.pid
-ExecStop=/usr/bin/python3 /usr/local/shadowsocksr/shadowsocks/server.py -c /usr/local/shadowsocksr/user-config-${port}.json -d stop --pid-file=/var/run/shadowsocksr-${port}.pid
-ExecReload=/bin/kill -HUP \$MAINPID
+ExecStart=/opt/shadowsocksr/start_${port}.sh
+ExecStop=$PYTHON_CMD /opt/shadowsocksr/shadowsocks/server.py -c /opt/shadowsocksr/config_${port}.json -d stop
 Restart=on-failure
-RestartSec=5s
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
+    
+    # 启用并启动服务
     systemctl daemon-reload
-    systemctl enable ssr-${port}.service
-    systemctl start ssr-${port}.service
+    systemctl enable ssr-${port} >/dev/null 2>&1
+    systemctl start ssr-${port}
+    
+    # 检查服务状态
+    sleep 2
+    if systemctl is-active ssr-${port} >/dev/null 2>&1; then
+        log_info "服务 ssr-${port} 启动成功"
+        return 0
+    else
+        log_warn "服务 ssr-${port} 启动可能失败"
+        return 1
+    fi
 }
 
-# 主配置函数
-configure_ssr() {
-    local ips=("$@")
-    local base_port=8388
+# 主配置过程
+configure_all_ssr() {
+    log_step "开始配置多IP SSR服务..."
     
-    log_info "开始配置SSR服务..."
+    local config_summary="/root/ssr_game_configs.txt"
+    echo "=== 游戏加速器SSR配置 ===" > "$config_summary"
+    echo "配置时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$config_summary"
+    echo "服务器IP数量: ${#PUBLIC_IPS[@]}" >> "$config_summary"
+    echo "" >> "$config_summary"
     
-    # 存储配置信息
-    config_file="/root/ssr_configs.txt"
-    echo "=== SSR游戏加速器配置信息 ===" > "$config_file"
-    echo "生成时间: $(date)" >> "$config_file"
-    echo "" >> "$config_file"
+    local success_count=0
     
-    for i in "${!ips[@]}"; do
-        local ip="${ips[i]}"
-        local port=$((base_port + i))
+    for i in "${!PUBLIC_IPS[@]}"; do
+        local ip="${PUBLIC_IPS[i]}"
+        local port=$((BASE_PORT + i))
         local password=$(generate_password)
         
-        log_info "配置IP ${ip} 端口 ${port}..."
+        echo "正在配置 IP: $ip 端口: $port"
         
-        # 生成配置文件
-        generate_ssr_config "$ip" "$port" "$password"
+        # 创建配置
+        create_ssr_config "$ip" "$port" "$password"
         
         # 配置防火墙
-        configure_firewall "$port"
+        setup_firewall "$port"
         
-        # 创建并启动服务
-        create_systemd_service "$port"
+        # 创建启动脚本和服务
+        if create_startup_script "$port"; then
+            ((success_count++))
+            
+            # 添加到配置摘要
+            echo "--- 配置 $((i+1)) ---" >> "$config_summary"
+            echo "服务器: $ip" >> "$config_summary"
+            echo "端口: $port" >> "$config_summary"
+            echo "密码: $password" >> "$config_summary"
+            echo "加密: $ENCRYPTION_METHOD" >> "$config_summary"
+            echo "协议: $PROTOCOL" >> "$config_summary"
+            echo "混淆: $OBFS" >> "$config_summary"
+            
+            # 生成SSR链接
+            local auth_string="${ip}:${port}:${PROTOCOL}:${ENCRYPTION_METHOD}:${OBFS}:$(echo -n "$password" | base64 -w 0)"
+            local ssr_url="ssr://$(echo -n "$auth_string" | base64 -w 0)"
+            echo "SSR链接: $ssr_url" >> "$config_summary"
+            echo "" >> "$config_summary"
+        fi
         
-        # 保存配置信息
-        echo "--- 配置 $((i+1)) ---" >> "$config_file"
-        echo "服务器地址: ${ip}" >> "$config_file"
-        echo "端口: ${port}" >> "$config_file"
-        echo "密码: ${password}" >> "$config_file"
-        echo "加密方式: aes-256-gcm" >> "$config_file"
-        echo "协议: origin" >> "$config_file"
-        echo "混淆: plain" >> "$config_file"
-        echo "" >> "$config_file"
-        
-        # 生成URL
-        local ssr_url=$(echo -n "${ip}:${port}:origin:aes-256-gcm:plain:${password}" | base64 -w 0)
-        echo "SSR链接: ssr://${ssr_url}" >> "$config_file"
-        echo "" >> "$config_file"
-        
-        sleep 2
+        # 防止内存压力，短暂休息
+        sleep 1
     done
     
-    log_info "所有SSR服务配置完成！"
-    log_info "配置信息已保存到: $config_file"
+    echo "管理命令:" >> "$config_summary"
+    echo "查看状态: systemctl status ssr-*" >> "$config_summary"
+    echo "重启服务: systemctl restart ssr-端口号" >> "$config_summary"
+    echo "查看日志: journalctl -u ssr-端口号" >> "$config_summary"
+    
+    log_info "成功配置 $success_count/${#PUBLIC_IPS[@]} 个SSR服务"
+    log_info "配置详情保存在: $config_summary"
 }
 
-# 显示服务状态
-show_status() {
-    log_info "检查SSR服务状态..."
+# 显示最终状态
+show_final_status() {
+    log_step "检查服务状态..."
     
-    for service in $(systemctl list-units --type=service | grep ssr- | awk '{print $1}'); do
-        status=$(systemctl is-active $service)
-        if [[ "$status" == "active" ]]; then
-            log_info "$service: ${GREEN}运行中${NC}"
+    echo ""
+    echo "=== 服务状态 ==="
+    local active_count=0
+    
+    for i in "${!PUBLIC_IPS[@]}"; do
+        local port=$((BASE_PORT + i))
+        local ip="${PUBLIC_IPS[i]}"
+        
+        if systemctl is-active ssr-${port} >/dev/null 2>&1; then
+            echo -e "✅ $ip:$port - ${GREEN}运行中${NC}"
+            ((active_count++))
         else
-            log_error "$service: ${RED}已停止${NC}"
+            echo -e "❌ $ip:$port - ${RED}已停止${NC}"
         fi
     done
+    
+    echo ""
+    echo "=== 配置完成 ==="
+    echo "活跃服务: $active_count/${#PUBLIC_IPS[@]}"
+    echo "配置文件: /root/ssr_game_configs.txt"
+    echo ""
+    echo "如需查看完整配置信息:"
+    echo "cat /root/ssr_game_configs.txt"
 }
 
 # 主函数
 main() {
-    echo "=== 多公网IP SSR游戏加速器配置脚本 ==="
+    clear
+    echo "================================================="
+    echo "   轻量级SSR多IP游戏加速器配置脚本"
+    echo "   适用于512M内存阿里云轻量应用服务器"
+    echo "================================================="
     echo ""
     
-    # 检查权限
+    # 预检查
     check_root
+    check_system
+    check_memory
     
-    # 获取公网IP
-    ips_array=($(get_public_ips))
+    # 显示将要配置的IP
+    echo "将要配置的IP地址:"
+    for i in "${!PUBLIC_IPS[@]}"; do
+        echo "  $((i+1)). ${PUBLIC_IPS[i]}:$((BASE_PORT + i))"
+    done
+    echo ""
     
-    if [[ ${#ips_array[@]} -eq 0 ]]; then
-        log_error "未找到可用的公网IP"
-        exit 1
-    fi
-    
-    # 安装依赖
-    install_dependencies
-    
-    # 配置SSR
-    configure_ssr "${ips_array[@]}"
-    
-    # 显示状态
-    show_status
+    # 开始配置
+    install_minimal_deps
+    download_ssr
+    configure_all_ssr
+    show_final_status
     
     echo ""
-    log_info "配置完成！请查看 /root/ssr_configs.txt 获取连接信息"
-    log_info "管理命令:"
-    echo "  查看所有服务状态: systemctl status ssr-*"
-    echo "  重启服务: systemctl restart ssr-端口号"
-    echo "  查看日志: journalctl -u ssr-端口号 -f"
+    echo "🎮 游戏加速器SSR配置完成！"
+    echo "请将配置信息导入您的游戏加速器客户端"
 }
+
+# 错误处理
+trap 'log_error "脚本执行失败，请检查错误信息"; exit 1' ERR
 
 # 运行主函数
 main "$@"
