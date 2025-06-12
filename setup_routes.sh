@@ -3,6 +3,13 @@
 # 多公网IP型服务器路由配置脚本
 # 用途：配置每个网卡的入出流量都走自己的网卡
 # 适用于阿里云多公网IP型规格族
+# 下载并运行
+# curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/setup_routes.sh | sudo bash
+
+
+# 多公网IP型服务器路由配置脚本
+# 用途：配置每个网卡的入出流量都走自己的网卡
+# 适用于阿里云多公网IP型规格族
 
 set -e
 
@@ -36,14 +43,37 @@ get_gateway() {
 
 # 检测当前网卡配置
 echo "正在检测当前网卡配置..."
-eth0_ip=$(ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 || echo "")
+eth0_ip=$(ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1 || echo "")
 eth1_ip=$(ip addr show eth1 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1 || echo "")
-eth1_1_ip=$(ip addr show eth1:1 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 || echo "")
+eth1_1_ip=$(ip addr show eth1:1 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1 || echo "")
+
+# 特殊处理：如果eth1:1没有独立IP，尝试从ifconfig获取
+if [[ -z "$eth1_1_ip" ]] || [[ "$eth1_1_ip" == "$eth1_ip" ]]; then
+    eth1_1_ip=$(ifconfig eth1:1 2>/dev/null | grep 'inet ' | awk '{print $2}' || echo "")
+fi
 
 echo "检测到的网卡配置："
 [[ -n "$eth0_ip" ]] && echo "  eth0: $eth0_ip"
 [[ -n "$eth1_ip" ]] && echo "  eth1: $eth1_ip"
 [[ -n "$eth1_1_ip" ]] && echo "  eth1:1: $eth1_1_ip"
+
+# 调试信息
+echo ""
+echo "调试信息："
+echo "  eth0_ip变量: '$eth0_ip'"
+echo "  eth1_ip变量: '$eth1_ip'"
+echo "  eth1_1_ip变量: '$eth1_1_ip'"
+echo ""
+
+# 检查IP地址是否有效
+check_ip_valid() {
+    local ip=$1
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
 
 # 获取网关
 gateway=$(get_gateway "$eth0_ip")
@@ -56,25 +86,29 @@ ip rule show > /tmp/rule_backup_$(date +%Y%m%d_%H%M%S).txt
 
 # 清理可能存在的旧配置
 echo "正在清理旧的路由配置..."
-ip rule del from $eth1_ip lookup 1001 2>/dev/null || true
-ip rule del from $eth1_1_ip lookup 1002 2>/dev/null || true
+[[ -n "$eth1_ip" ]] && check_ip_valid "$eth1_ip" && ip rule del from $eth1_ip lookup 1001 2>/dev/null || true
+[[ -n "$eth1_1_ip" ]] && check_ip_valid "$eth1_1_ip" && ip rule del from $eth1_1_ip lookup 1002 2>/dev/null || true
 ip route flush table 1001 2>/dev/null || true
 ip route flush table 1002 2>/dev/null || true
 
 # 配置eth1路由
-if [[ -n "$eth1_ip" ]]; then
+if [[ -n "$eth1_ip" ]] && check_ip_valid "$eth1_ip"; then
     echo "正在配置 eth1 ($eth1_ip) 路由..."
     ip route add default via $gateway dev eth1 table 1001
     ip rule add from $eth1_ip lookup 1001
     echo "  ✓ eth1 路由配置完成"
+else
+    echo "  ⚠ 跳过eth1配置：IP地址无效或为空"
 fi
 
 # 配置eth1:1路由
-if [[ -n "$eth1_1_ip" ]]; then
+if [[ -n "$eth1_1_ip" ]] && check_ip_valid "$eth1_1_ip" && [[ "$eth1_1_ip" != "$eth1_ip" ]]; then
     echo "正在配置 eth1:1 ($eth1_1_ip) 路由..."
     ip route add default via $gateway dev eth1 table 1002
     ip rule add from $eth1_1_ip lookup 1002
     echo "  ✓ eth1:1 路由配置完成"
+else
+    echo "  ⚠ 跳过eth1:1配置：IP地址无效、为空或与eth1相同"
 fi
 
 # 创建开机自动加载脚本
@@ -87,22 +121,26 @@ cat > /etc/rc.local << EOF
 # 等待网络初始化
 sleep 10
 
+# 获取当前IP（开机时重新获取，防止IP变化）
+eth1_ip=\$(ip addr show eth1 2>/dev/null | grep 'inet ' | awk '{print \$2}' | cut -d'/' -f1 | head -1)
+eth1_1_ip=\$(ifconfig eth1:1 2>/dev/null | grep 'inet ' | awk '{print \$2}')
+
 # 清理可能存在的旧配置
-ip rule del from $eth1_ip lookup 1001 2>/dev/null || true
-ip rule del from $eth1_1_ip lookup 1002 2>/dev/null || true
+[[ -n "\$eth1_ip" ]] && ip rule del from \$eth1_ip lookup 1001 2>/dev/null || true
+[[ -n "\$eth1_1_ip" ]] && ip rule del from \$eth1_1_ip lookup 1002 2>/dev/null || true
 ip route flush table 1001 2>/dev/null || true
 ip route flush table 1002 2>/dev/null || true
 
 # 配置eth1路由
-if [[ -n "$eth1_ip" ]]; then
+if [[ -n "\$eth1_ip" ]]; then
     ip route add default via $gateway dev eth1 table 1001
-    ip rule add from $eth1_ip lookup 1001
+    ip rule add from \$eth1_ip lookup 1001
 fi
 
 # 配置eth1:1路由  
-if [[ -n "$eth1_1_ip" ]]; then
+if [[ -n "\$eth1_1_ip" ]] && [[ "\$eth1_1_ip" != "\$eth1_ip" ]]; then
     ip route add default via $gateway dev eth1 table 1002
-    ip rule add from $eth1_1_ip lookup 1002
+    ip rule add from \$eth1_1_ip lookup 1002
 fi
 
 exit 0
@@ -155,6 +193,6 @@ echo "  - eth1:1: 入出流量都走 eth1（使用路由表1002）"
 echo "  - 配置已写入 /etc/rc.local，重启后自动生效"
 echo ""
 echo "如需恢复默认配置，请运行："
-echo "  ip rule del from $eth1_ip lookup 1001"
-echo "  ip rule del from $eth1_1_ip lookup 1002"
+[[ -n "$eth1_ip" ]] && check_ip_valid "$eth1_ip" && echo "  ip rule del from $eth1_ip lookup 1001"
+[[ -n "$eth1_1_ip" ]] && check_ip_valid "$eth1_1_ip" && echo "  ip rule del from $eth1_1_ip lookup 1002"
 echo ""
