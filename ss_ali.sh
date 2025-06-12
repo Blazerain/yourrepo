@@ -3,7 +3,7 @@
 #=================================================
 # 轻量级SSR多IP配置脚本 - 512M内存优化版
 # 适用于阿里云轻量应用服务器
-# 一键部署命令: curl -sSL https://raw.githubusercontent.com/yourusername/ssr-multi-ip/main/install.sh | bash
+# 一键部署命令: curl -sSL https://raw.githubusercontent.com/yourusername/ssr-multi-ip/main/ss_ali.sh | bash
 #=================================================
 
 set -e
