@@ -1,298 +1,207 @@
 #!/bin/bash
 
-# Shadowsocks多网卡自动配置脚本
-# 自动检测网卡IP并配置端口11000/12000/13000，密码qwe123
+# Shadowsocks多内网IP配置脚本
+# 固定端口11000/12000/13000，密码qwe123
 
-set -e
+# 检查root权限
+if [[ $EUID -ne 0 ]]; then
+    echo "错误：需要root权限运行此脚本"
+    exit 1
+fi
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# 检查shadowsocks是否安装
+if [[ ! -f /etc/init.d/shadowsocks ]]; then
+    echo "错误：shadowsocks未安装，请先安装shadowsocks-go"
+    exit 1
+fi
 
-# 日志函数
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+echo "=== Shadowsocks多内网IP配置脚本 ==="
+echo "固定端口：11000/12000/13000"
+echo "统一密码：qwe123"
+echo ""
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+# 使用你提供的命令检测所有内网IP
+echo "正在检测网卡IP..."
+INTERNAL_IPS=($(ip -br addr show | grep -v "127.0.0.1" | awk '{for(i=3;i<=NF;i++) print $i}' | cut -d'/' -f1 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'))
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+if [[ ${#INTERNAL_IPS[@]} -eq 0 ]]; then
+    echo "错误：未检测到内网IP"
+    exit 1
+fi
 
-# 检查是否为root用户
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "此脚本需要root权限运行"
-        exit 1
-    fi
-}
+echo "检测到 ${#INTERNAL_IPS[@]} 个内网IP："
+for i in "${!INTERNAL_IPS[@]}"; do
+    echo "  IP$((i+1)): ${INTERNAL_IPS[i]}"
+done
 
-# 检查shadowsocks是否已安装
-check_shadowsocks() {
-    if [[ ! -f /etc/init.d/shadowsocks ]]; then
-        log_error "shadowsocks未安装！请先安装shadowsocks-go"
-        echo "安装命令："
-        echo "wget --no-check-certificate https://raw.githubusercontent.com/teddysun/shadowsocks_install/master/shadowsocks-go.sh"
-        echo "chmod +x shadowsocks-go.sh"
-        echo "./shadowsocks-go.sh"
-        exit 1
-    fi
-    log_info "shadowsocks已安装，开始配置..."
-}
+# 固定配置
+PORTS=(11000 12000 13000)
+PASSWORD="qwe123"
 
-# 获取所有网卡的内网IP
-get_all_internal_ips() {
-    log_info "检测所有网卡的内网IP..."
-    
-    local ips=()
-    
-    # 使用ip命令获取所有网卡IP（排除lo、docker等虚拟接口）
-    if command -v ip >/dev/null 2>&1; then
-        while IFS= read -r line; do
-            if [[ -n "$line" && "$line" != "127.0.0.1" ]]; then
-                ips+=("$line")
-            fi
-        done < <(ip addr show | grep -E "inet [0-9]" | grep -v "127.0.0.1" | grep -v "docker\|lo\|br-" | awk '{print $2}' | cut -d'/' -f1 | head -3)
-    fi
-    
-    if [[ ${#ips[@]} -eq 0 ]]; then
-        log_error "未找到任何可用的内网IP地址"
-        exit 1
-    fi
-    
-    log_info "发现 ${#ips[@]} 个内网IP:"
-    for i in "${!ips[@]}"; do
-        echo -e "  网卡$((i+1)): ${GREEN}${ips[i]}${NC}"
+echo ""
+echo "=== 配置信息 ==="
+echo "密码: $PASSWORD"
+echo "加密: aes-256-cfb"
+echo "监听模式: 0.0.0.0 (所有接口)"
+echo ""
+
+# 显示端口配置
+MAX_COUNT=$((${#PORTS[@]} < ${#INTERNAL_IPS[@]} ? ${#PORTS[@]} : ${#INTERNAL_IPS[@]}))
+
+for ((i=0; i<MAX_COUNT; i++)); do
+    echo "端口${PORTS[i]} -> 可通过 ${INTERNAL_IPS[i]} 访问"
+done
+
+# 如果IP数量超过端口数量，显示剩余IP
+if [[ ${#INTERNAL_IPS[@]} -gt ${#PORTS[@]} ]]; then
+    echo ""
+    echo "注意：以下IP也可以通过所有端口访问："
+    for ((i=${#PORTS[@]}; i<${#INTERNAL_IPS[@]}; i++)); do
+        echo "  ${INTERNAL_IPS[i]}"
     done
-    
-    echo "${ips[@]}"
-}
+fi
 
-# 获取IP对应的公网IP
-get_public_ip_for_internal() {
-    local internal_ip=$1
-    log_info "获取 $internal_ip 对应的公网IP..."
-    
-    local public_ip=""
-    
-    # 尝试通过绑定特定IP获取对应的公网IP
-    for service in "ifconfig.me" "ipinfo.io/ip" "icanhazip.com"; do
-        public_ip=$(timeout 10 curl -s --connect-timeout 5 --bind-address "$internal_ip" "$service" 2>/dev/null | tr -d '\n\r' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
-        if [[ -n "$public_ip" ]]; then
-            log_info "$internal_ip 对应的公网IP: $public_ip"
-            echo "$public_ip"
-            return
-        fi
-    done
-    
-    # 如果绑定失败，使用通用方法获取公网IP
-    log_warn "无法获取 $internal_ip 的专用公网IP，使用服务器主公网IP"
-    for service in "ifconfig.me" "ipinfo.io/ip" "icanhazip.com"; do
-        public_ip=$(timeout 10 curl -s --connect-timeout 5 "$service" 2>/dev/null | tr -d '\n\r' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
-        if [[ -n "$public_ip" ]]; then
-            echo "$public_ip"
-            return
-        fi
-    done
-    
-    log_error "无法获取公网IP，请检查网络连接"
-    echo "未知"
-}
+echo ""
+read -p "确认配置并继续？ [y/N]: " confirm
+if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "已取消"
+    exit 0
+fi
 
-# 创建shadowsocks配置文件
-create_shadowsocks_config() {
-    local internal_ips=($1)
-    
-    log_info "创建shadowsocks配置文件..."
-    
-    # 备份原配置
-    if [[ -f /etc/shadowsocks/config.json ]]; then
-        cp /etc/shadowsocks/config.json "/etc/shadowsocks/config.json.backup.$(date +%Y%m%d_%H%M%S)"
-        log_info "原配置已备份"
+# 备份原配置
+if [[ -f /etc/shadowsocks/config.json ]]; then
+    cp /etc/shadowsocks/config.json "/etc/shadowsocks/config.json.backup.$(date +%Y%m%d_%H%M%S)"
+    echo "原配置已备份"
+fi
+
+mkdir -p /etc/shadowsocks
+
+# 生成端口密码配置
+PORT_CONFIG=""
+for ((i=0; i<${#PORTS[@]}; i++)); do
+    if [[ -n "$PORT_CONFIG" ]]; then
+        PORT_CONFIG+=","
     fi
-    
-    # 确保配置目录存在
-    mkdir -p /etc/shadowsocks
-    
-    # 固定端口和密码
-    local ports=(11000 12000 13000)
-    local password="qwe123"
-    
-    # 构建端口密码配置
-    local port_password_lines=""
-    local max_ips=$((${#ports[@]} < ${#internal_ips[@]} ? ${#ports[@]} : ${#internal_ips[@]}))
-    
-    echo -e "\n${BLUE}=== Shadowsocks配置信息 ===${NC}"
-    echo -e "${BLUE}监听模式:${NC} 所有IP (0.0.0.0)"
-    echo -e "${BLUE}加密方式:${NC} aes-256-cfb"
-    echo -e "${BLUE}统一密码:${NC} $password"
-    echo
-    
-    for ((i=0; i<max_ips; i++)); do
-        local internal_ip="${internal_ips[i]}"
-        local port="${ports[i]}"
-        local public_ip=$(get_public_ip_for_internal "$internal_ip")
-        
-        if [[ $i -gt 0 ]]; then
-            port_password_lines+=","
-        fi
-        port_password_lines+="\n         \"$port\":\"$password\""
-        
-        echo -e "${GREEN}网卡$((i+1)) (${internal_ip}):${NC}"
-        echo -e "  公网IP: ${YELLOW}$public_ip${NC}"
-        echo -e "  端口: ${YELLOW}$port${NC}"
-        echo -e "  连接: ${YELLOW}$public_ip:$port${NC}"
-        echo
-    done
-    
-    # 创建配置文件
-    cat > /etc/shadowsocks/config.json << EOF
+    PORT_CONFIG+="\n    \"${PORTS[i]}\":\"$PASSWORD\""
+done
+
+# 创建配置文件 - 监听所有接口
+cat > /etc/shadowsocks/config.json << EOF
 {
-    "server":"0.0.0.0",
-    "port_password":{$port_password_lines
+    "server": "0.0.0.0",
+    "port_password": {$PORT_CONFIG
     },
-    "method":"aes-256-cfb",
-    "timeout":600
+    "method": "aes-256-cfb",
+    "timeout": 600
 }
 EOF
-    
-    log_info "配置文件已创建: /etc/shadowsocks/config.json"
-    
-    # 保存连接信息到文件
-    echo "Shadowsocks连接信息 - $(date)" > /etc/shadowsocks/connection_info.txt
-    echo "密码: $password" >> /etc/shadowsocks/connection_info.txt
-    echo "加密: aes-256-cfb" >> /etc/shadowsocks/connection_info.txt
-    echo "" >> /etc/shadowsocks/connection_info.txt
-    
-    for ((i=0; i<max_ips; i++)); do
-        local internal_ip="${internal_ips[i]}"
-        local port="${ports[i]}"
-        local public_ip=$(get_public_ip_for_internal "$internal_ip")
-        echo "网卡$((i+1)): $public_ip:$port" >> /etc/shadowsocks/connection_info.txt
-    done
-    
-    log_info "连接信息已保存到: /etc/shadowsocks/connection_info.txt"
-}
+
+echo "配置文件已创建"
 
 # 配置防火墙
-configure_firewall() {
-    log_info "配置防火墙规则..."
-    
-    local ports=(11000 12000 13000)
-    
-    for port in "${ports[@]}"; do
-        # ufw
-        if command -v ufw >/dev/null 2>&1 && ufw status >/dev/null 2>&1; then
-            ufw allow $port/tcp >/dev/null 2>&1 || true
-            ufw allow $port/udp >/dev/null 2>&1 || true
-            log_info "ufw: 已开放端口 $port"
-        fi
-        
-        # firewalld
-        if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
-            firewall-cmd --permanent --add-port=$port/tcp >/dev/null 2>&1 || true
-            firewall-cmd --permanent --add-port=$port/udp >/dev/null 2>&1 || true
-            log_info "firewalld: 已开放端口 $port"
-        fi
-        
-        # iptables
-        if command -v iptables >/dev/null 2>&1; then
-            iptables -C INPUT -p tcp --dport $port -j ACCEPT >/dev/null 2>&1 || iptables -I INPUT -p tcp --dport $port -j ACCEPT
-            iptables -C INPUT -p udp --dport $port -j ACCEPT >/dev/null 2>&1 || iptables -I INPUT -p udp --dport $port -j ACCEPT
-            log_info "iptables: 已开放端口 $port"
-        fi
-    done
-    
-    # 重载防火墙配置
-    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
-        firewall-cmd --reload >/dev/null 2>&1 || true
-    fi
-    
-    # 保存iptables规则
+echo "配置防火墙..."
+for port in "${PORTS[@]}"; do
+    # iptables
     if command -v iptables >/dev/null 2>&1; then
-        if [[ -f /etc/redhat-release ]]; then
-            service iptables save >/dev/null 2>&1 || true
-        elif [[ -d /etc/iptables ]]; then
-            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-        fi
+        iptables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport $port -j ACCEPT
+        iptables -C INPUT -p udp --dport $port -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $port -j ACCEPT
     fi
-}
+    
+    # firewalld
+    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port=$port/tcp >/dev/null 2>&1 || true
+        firewall-cmd --permanent --add-port=$port/udp >/dev/null 2>&1 || true
+    fi
+    
+    # ufw
+    if command -v ufw >/dev/null 2>&1; then
+        ufw allow $port >/dev/null 2>&1 || true
+    fi
+done
 
-# 重启shadowsocks服务
-restart_shadowsocks() {
-    log_info "重启shadowsocks服务..."
-    
-    # 停止服务
-    /etc/init.d/shadowsocks stop >/dev/null 2>&1 || true
-    sleep 2
-    
-    # 启动服务
-    if /etc/init.d/shadowsocks start >/dev/null 2>&1; then
-        log_info "shadowsocks服务启动成功"
-        sleep 2
-        /etc/init.d/shadowsocks status
-    else
-        log_error "shadowsocks服务启动失败"
-        /etc/init.d/shadowsocks status
+# 重载firewalld
+if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+    firewall-cmd --reload >/dev/null 2>&1 || true
+fi
+
+echo "防火墙配置完成"
+
+# 保存连接信息
+cat > /etc/shadowsocks/connection_info.txt << EOF
+Shadowsocks连接信息 - $(date)
+密码: $PASSWORD
+加密: aes-256-cfb
+监听: 0.0.0.0 (所有接口)
+
+可用连接地址：
+EOF
+
+for ip in "${INTERNAL_IPS[@]}"; do
+    for port in "${PORTS[@]}"; do
+        echo "$ip:$port" >> /etc/shadowsocks/connection_info.txt
+    done
+done
+
+# 检查配置文件
+echo "检查配置文件..."
+if command -v python >/dev/null 2>&1; then
+    if ! python -m json.tool /etc/shadowsocks/config.json >/dev/null 2>&1; then
+        echo "配置文件格式错误："
+        cat /etc/shadowsocks/config.json
         exit 1
     fi
-}
+fi
 
-# 显示最终结果
-show_final_result() {
-    echo -e "\n${GREEN}=== 配置完成 ===${NC}"
-    echo -e "\n${BLUE}连接信息:${NC}"
-    cat /etc/shadowsocks/connection_info.txt
-    
-    echo -e "\n${BLUE}管理命令:${NC}"
-    echo -e "启动: ${YELLOW}/etc/init.d/shadowsocks start${NC}"
-    echo -e "停止: ${YELLOW}/etc/init.d/shadowsocks stop${NC}"
-    echo -e "重启: ${YELLOW}/etc/init.d/shadowsocks restart${NC}"
-    echo -e "状态: ${YELLOW}/etc/init.d/shadowsocks status${NC}"
-    
-    echo -e "\n${BLUE}配置文件:${NC}"
-    echo -e "主配置: ${YELLOW}/etc/shadowsocks/config.json${NC}"
-    echo -e "连接信息: ${YELLOW}/etc/shadowsocks/connection_info.txt${NC}"
-    
-    echo -e "\n${GREEN}所有网卡的shadowsocks服务已配置完成！${NC}"
-}
+# 重启shadowsocks
+echo "重启shadowsocks服务..."
+/etc/init.d/shadowsocks stop >/dev/null 2>&1 || true
+sleep 3
 
-# 主函数
-main() {
-    echo -e "${BLUE}Shadowsocks多网卡自动配置脚本${NC}"
-    echo -e "自动检测网卡IP并配置端口11000/12000/13000\n"
-    
-    # 检查权限和环境
-    check_root
-    check_shadowsocks
-    
-    # 获取所有内网IP
-    local internal_ips_str=$(get_all_internal_ips)
-    local internal_ips=($internal_ips_str)
-    
-    if [[ ${#internal_ips[@]} -lt 3 ]]; then
-        log_warn "检测到 ${#internal_ips[@]} 个网卡，少于3个"
-        echo "将为现有网卡配置对应端口"
-    fi
-    
-    # 创建配置
-    create_shadowsocks_config "$internal_ips_str"
-    
-    # 配置防火墙
-    configure_firewall
-    
-    # 重启服务
-    restart_shadowsocks
-    
-    # 显示结果
-    show_final_result
-}
+if /etc/init.d/shadowsocks start; then
+    echo "shadowsocks启动成功！"
+    sleep 2
+    /etc/init.d/shadowsocks status
+else
+    echo "shadowsocks启动失败，配置文件内容："
+    cat /etc/shadowsocks/config.json
+    exit 1
+fi
 
-# 运行主函数
-main "$@"
+# 显示结果
+echo ""
+echo "=== 配置完成 ==="
+echo ""
+echo "检测到的内网IP："
+for ip in "${INTERNAL_IPS[@]}"; do
+    echo "  $ip"
+done
+
+echo ""
+echo "开放的端口："
+for port in "${PORTS[@]}"; do
+    echo "  $port"
+done
+
+echo ""
+echo "所有可用连接组合："
+for ip in "${INTERNAL_IPS[@]}"; do
+    for port in "${PORTS[@]}"; do
+        echo "  $ip:$port (密码: $PASSWORD)"
+    done
+done
+
+echo ""
+echo "配置文件："
+echo "  主配置: /etc/shadowsocks/config.json"
+echo "  连接信息: /etc/shadowsocks/connection_info.txt"
+
+echo ""
+echo "管理命令："
+echo "  启动: /etc/init.d/shadowsocks start"
+echo "  停止: /etc/init.d/shadowsocks stop"
+echo "  重启: /etc/init.d/shadowsocks restart"
+echo "  状态: /etc/init.d/shadowsocks status"
+
+echo ""
+echo "多内网IP shadowsocks配置完成！"
+echo "现在所有内网IP都可以通过端口11000/12000/13000提供shadowsocks服务"
