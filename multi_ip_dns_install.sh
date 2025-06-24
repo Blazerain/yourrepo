@@ -177,46 +177,17 @@ for interface in "${!CONFIG[@]}"; do
     
     config_file="/etc/xray-multi/config_${interface//:/_}.json"
     
-    # 构建inbounds数组
-    inbounds_json=""
-    for i in "${!PORT_ARRAY[@]}"; do
-        port="${PORT_ARRAY[$i]}"
+    # 为每个端口创建单独的配置文件
+    for port in "${PORT_ARRAY[@]}"; do
+        single_config_file="/etc/xray-multi/config_${interface//:/_}_${port}.json"
         
-        if [ $i -gt 0 ]; then
-            inbounds_json="${inbounds_json},"
-        fi
-        
-        inbounds_json="${inbounds_json}
-    {
-      \"tag\": \"socks5-in-${interface//:/_}-${port}\",
-      \"port\": $port,
-      \"protocol\": \"socks\",
-      \"listen\": \"0.0.0.0\",
-      \"settings\": {
-        \"auth\": \"password\",
-        \"accounts\": [
-          {
-            \"user\": \"vip\",
-            \"pass\": \"123456\"
-          }
-        ],
-        \"udp\": true
-      },
-      \"sniffing\": {
-        \"enabled\": true,
-        \"destOverride\": [\"http\", \"tls\", \"quic\"],
-        \"domainsExcluded\": [\"courier.push.apple.com\"]
-      }
-    }"
-    done
-    
-    # 创建配置文件
-    cat > "$config_file" << CONFIGEOF
+        # 创建配置文件
+        cat > "$single_config_file" << CONFIGEOF
 {
   "log": {
     "loglevel": "info",
-    "access": "/var/log/xray-multi/access_${interface//:/_}.log",
-    "error": "/var/log/xray-multi/error_${interface//:/_}.log"
+    "access": "/var/log/xray-multi/access_${interface//:/_}_${port}.log",
+    "error": "/var/log/xray-multi/error_${interface//:/_}_${port}.log"
   },
   "dns": {
     "servers": [
@@ -246,11 +217,32 @@ for interface in "${!CONFIG[@]}"; do
     "clientIp": "1.2.3.4",
     "tag": "dns-inbound"
   },
-  "inbounds": [$inbounds_json
+  "inbounds": [
+    {
+      "tag": "socks5-in-${interface//:/_}-${port}",
+      "port": $port,
+      "protocol": "socks",
+      "listen": "0.0.0.0",
+      "settings": {
+        "auth": "password",
+        "accounts": [
+          {
+            "user": "vip",
+            "pass": "123456"
+          }
+        ],
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "domainsExcluded": ["courier.push.apple.com"]
+      }
+    }
   ],
   "outbounds": [
     {
-      "tag": "direct-${interface//:/_}",
+      "tag": "direct-${interface//:/_}-${port}",
       "protocol": "freedom",
       "settings": {
         "domainStrategy": "UseIPv4",
@@ -283,7 +275,7 @@ for interface in "${!CONFIG[@]}"; do
           "tw.beanfun.com",
           "csp-hk-beanfun-com.ap-east-1.elasticbeanstalk.com"
         ],
-        "outboundTag": "direct-${interface//:/_}"
+        "outboundTag": "direct-${interface//:/_}-${port}"
       },
       {
         "type": "field",
@@ -296,7 +288,7 @@ for interface in "${!CONFIG[@]}"; do
           "202.80.107.11/32",
           "52.147.74.109/32"
         ],
-        "outboundTag": "direct-${interface//:/_}"
+        "outboundTag": "direct-${interface//:/_}-${port}"
       },
       {
         "type": "field",
@@ -313,21 +305,22 @@ for interface in "${!CONFIG[@]}"; do
           "172.16.0.0/12",
           "192.168.0.0/16"
         ],
-        "outboundTag": "direct-${interface//:/_}"
+        "outboundTag": "direct-${interface//:/_}-${port}"
       }
     ]
   }
 }
 CONFIGEOF
 
-    echo "✅ 配置: $interface ($ip) -> 端口: ${ports}"
-    
-    # 验证配置语法
-    if /usr/local/bin/xray test -config "$config_file" >/dev/null 2>&1; then
-        echo "  ✅ 配置语法正确"
-    else
-        echo "  ⚠️ 配置语法警告，但继续执行"
-    fi
+        # 验证配置语法
+        if /usr/local/bin/xray test -config "$single_config_file" >/dev/null 2>&1; then
+            echo "    ✅ 端口$port 配置语法正确"
+        else
+            echo "    ❌ 端口$port 配置语法错误"
+            /usr/local/bin/xray test -config "$single_config_file"
+        fi
+    done
+    echo "✅ 配置: $interface ($ip) -> 5个端口: ${ports}"
     
     config_count=$((config_count + 1))
 done
