@@ -3,7 +3,7 @@
 # 稳定版多公网IP服务器SOCKS5代理安装脚本
 # 修复语法错误，简化复杂操作
 # 端口: 11000, 12000, 13000
-# 用户: vip1/123456
+# 用户: vip1-vip10/123456 (支持多用户)
 # 使用方法: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/multi_ip_dns_install.sh | bash
 set -e
 
@@ -11,7 +11,7 @@ echo "=========================================="
 echo "🚀 稳定版多IP SOCKS5安装"
 echo "🌐 集成Beanfun游戏DNS优化"
 echo "🔌 固定端口: 11000, 12000, 13000"
-echo "👤 固定用户: vip1/123456"
+echo "👤 多用户: vip1-vip10/123456"
 echo "=========================================="
 
 # 检查root权限
@@ -221,7 +221,46 @@ for interface in "${!CONFIG[@]}"; do
       "settings": {
         "auth": "password",
         "accounts": [
-          {"user": "vip1", "pass": "123456"}
+          {
+            "user": "vip1",
+            "pass": "123456"
+          },
+          {
+            "user": "vip2", 
+            "pass": "123456"
+          },
+          {
+            "user": "vip3",
+            "pass": "123456"
+          },
+          {
+            "user": "vip4",
+            "pass": "123456"
+          },
+          {
+            "user": "vip5",
+            "pass": "123456"
+          },
+          {
+            "user": "vip6",
+            "pass": "123456"
+          },
+          {
+            "user": "vip7",
+            "pass": "123456"
+          },
+          {
+            "user": "vip8",
+            "pass": "123456"
+          },
+          {
+            "user": "vip9",
+            "pass": "123456"
+          },
+          {
+            "user": "vip10",
+            "pass": "123456"
+          }
         ],
         "udp": true,
         "ip": "$ip"
@@ -482,6 +521,79 @@ DNSEOF
 
 chmod +x /usr/local/bin/beanfun-dns-test.sh
 
+# 配置检查和修复工具
+cat > /usr/local/bin/xray-config-check.sh << 'CHECKEOF'
+#!/bin/bash
+
+echo "==========================================="
+echo "🔧 Xray配置检查和修复工具"
+echo "==========================================="
+
+CONFIG_DIR="/etc/xray-multi"
+
+if [ ! -d "$CONFIG_DIR" ]; then
+    echo "❌ 配置目录不存在: $CONFIG_DIR"
+    exit 1
+fi
+
+echo "🔍 检查配置文件..."
+
+for config in "$CONFIG_DIR"/config_*.json; do
+    if [ -f "$config" ]; then
+        echo ""
+        echo "📄 检查: $(basename "$config")"
+        
+        # 语法检查
+        if /usr/local/bin/xray test -config "$config" 2>/dev/null; then
+            echo "  ✅ JSON语法正确"
+        else
+            echo "  ❌ JSON语法错误，显示详细错误:"
+            /usr/local/bin/xray test -config "$config"
+            echo ""
+            echo "  🔧 尝试修复配置..."
+            
+            # 备份原配置
+            cp "$config" "${config}.backup.$(date +%Y%m%d_%H%M%S)"
+            
+            # 重新生成配置文件
+            interface_name=$(basename "$config" .json | sed 's/config_//')
+            
+            echo "  📝 重新生成配置文件..."
+            # 这里需要重新生成配置，但由于没有原始变量，先输出提示
+            echo "  ⚠️ 请重新运行安装脚本或手动修复配置"
+        fi
+        
+        # 检查用户配置
+        echo "  👥 检查用户配置:"
+        if grep -q '"user": "vip1"' "$config" && grep -q '"user": "vip10"' "$config"; then
+            user_count=$(grep -c '"user": "vip' "$config")
+            echo "    ✅ 检测到 $user_count 个用户账号"
+        else
+            echo "    ❌ 用户配置可能有问题"
+        fi
+        
+        # 检查端口配置
+        port=$(grep -o '"port": [0-9]*' "$config" | grep -o '[0-9]*')
+        if [ -n "$port" ]; then
+            echo "    🔌 配置端口: $port"
+            if netstat -tlnp 2>/dev/null | grep -q ":$port "; then
+                echo "    ✅ 端口正在监听"
+            else
+                echo "    ❌ 端口未监听"
+            fi
+        fi
+    fi
+done
+
+echo ""
+echo "🧪 测试用户认证:"
+echo "curl --socks5 vip1:123456@127.0.0.1:11000 https://httpbin.org/ip --connect-timeout 10"
+echo ""
+echo "如果连接失败，可能需要重新运行安装脚本"
+CHECKEOF
+
+chmod +x /usr/local/bin/xray-config-check.sh
+
 # ====== 启动服务 ======
 echo "=========================================="
 echo "🚀 启动多IP SOCKS5服务"
@@ -540,11 +652,14 @@ echo ""
 echo "📝 生成配置文件..."
 cat > ~/Multi_IP_Socks5_Config.txt << USEREOF
 #############################################################################
-🎯 稳定版多IP SOCKS5代理配置
+🎯 稳定版多IP SOCKS5代理配置 (多用户版)
 
 📡 服务器信息:
 公网IP: $SERVER_IP
 检测到接口数: ${#CONFIG[@]}
+
+👥 支持用户账号 (密码都是123456):
+vip1, vip2, vip3, vip4, vip5, vip6, vip7, vip8, vip9, vip10
 
 🌐 Beanfun DNS优化 (已集成):
 ✅ hk.beanfun.com -> 112.121.124.11
@@ -571,12 +686,14 @@ for interface in "${!CONFIG[@]}"; do
     cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF2
 📌 $interface (内网IP: $ip):
    代理地址: $SERVER_IP:$port
-   用户名: vip1
+   支持用户: vip1-vip10 (任选一个)
    密码: 123456
    状态: $status
    
-   🔗 连接测试:
+   🔗 连接测试示例:
    curl --socks5 vip1:123456@$SERVER_IP:$port https://httpbin.org/ip
+   curl --socks5 vip5:123456@$SERVER_IP:$port https://httpbin.org/ip
+   curl --socks5 vip10:123456@$SERVER_IP:$port https://httpbin.org/ip
    
    🎮 Beanfun测试:
    curl --socks5-hostname vip1:123456@$SERVER_IP:$port https://bfweb.hk.beanfun.com
@@ -594,6 +711,7 @@ cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF3
 
 🔧 管理工具:
 DNS测试: /usr/local/bin/beanfun-dns-test.sh
+配置检查: /usr/local/bin/xray-config-check.sh
 手动启动: /usr/local/bin/xray-multi-start.sh
 手动停止: /usr/local/bin/xray-multi-stop.sh
 
@@ -601,28 +719,30 @@ DNS测试: /usr/local/bin/beanfun-dns-test.sh
 - 代理类型: SOCKS5
 - 服务器: $SERVER_IP  
 - 端口: 11000/12000/13000 (选择一个)
-- 用户名: vip1
+- 用户名: vip1-vip10 (任选一个)
 - 密码: 123456
 - 🚨 重要: 启用"代理DNS查询"或"远程DNS解析"
 - Firefox设置: network.proxy.socks_remote_dns = true
 
-💡 使用建议:
-1. 游戏账号隔离: 不同游戏使用不同IP代理
-2. 电商账号安全: 每个店铺使用独立IP
-3. 每个代理都包含完整的Beanfun优化配置
+💡 多用户使用建议:
+1. 账号隔离: 不同游戏/业务使用不同vip用户
+2. 同一IP可同时支持10个不同用户连接
+3. 建议为每个客户分配固定的vip账号
+4. vip1-vip10用户权限完全相同，可随意选择
 
 安装时间: $(date)
-版本: 稳定版 v2.1 (修复语法错误)
+版本: 稳定版 v2.2 (多用户支持版本)
 #############################################################################
 USEREOF3
 
 # 最终状态报告
 echo ""
 echo "=========================================="
-echo "🎉 稳定版多IP SOCKS5安装完成！"
+echo "🎉 稳定版多IP多用户SOCKS5安装完成！"
 echo "=========================================="
 echo "🌐 服务器公网IP: $SERVER_IP"
 echo "🔌 检测到 ${#CONFIG[@]} 个网络接口"
+echo "👥 支持用户: vip1-vip10 (密码:123456)"
 echo ""
 
 for interface in "${!CONFIG[@]}"; do
@@ -644,10 +764,12 @@ echo ""
 if [[ "$ALL_WORKING" == "true" ]]; then
     echo "🎯 所有服务正常运行！"
     echo ""
-    echo "🧪 快速测试示例:"
+    echo "🧪 快速测试示例 (任选用户):"
     for interface in "${!CONFIG[@]}"; do
         IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
         echo "   curl --socks5 vip1:123456@$SERVER_IP:$port https://httpbin.org/ip"
+        echo "   curl --socks5 vip5:123456@$SERVER_IP:$port https://httpbin.org/ip"
+        echo "   curl --socks5 vip10:123456@$SERVER_IP:$port https://httpbin.org/ip"
         break
     done
     echo ""
@@ -666,6 +788,7 @@ fi
 echo ""
 echo "🔧 常用命令:"
 echo "   DNS测试: /usr/local/bin/beanfun-dns-test.sh"
+echo "   配置检查: /usr/local/bin/xray-config-check.sh"
 echo "   服务状态: systemctl status xray-multi"
 echo "   重启服务: systemctl restart xray-multi"
 
@@ -674,6 +797,6 @@ cd /
 rm -rf /tmp/xray*
 
 echo ""
-echo "🎊 安装完成！稳定版多IP代理服务已就绪！"
-echo "🌐 每个IP都包含完整的Beanfun DNS优化配置！"
+echo "🎊 安装完成！稳定版多IP多用户代理服务已就绪！"
+echo "🌐 每个IP都支持vip1-vip10共10个用户同时使用！"
 echo "🔗 详细配置信息请查看: ~/Multi_IP_Socks5_Config.txt"
