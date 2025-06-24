@@ -2,7 +2,7 @@
 
 # newinstall.sh - 完整功能版多IP SOCKS5代理安装脚本
 # 功能：自动检测外网IP，单进程多用户，解决连接冲突
-# 使用方法: curl -sSL https://raw.githubusercontent.com/your-repo/newinstall.sh | bash
+# 使用方法: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/newinstall.sh | bash
 # 警告：【脚本命令不可重复运行】，如需重新搭建，请【重置云服务器系统】
 
 set -e
@@ -11,7 +11,7 @@ echo "=========================================="
 echo "🚀 完整功能版多IP SOCKS5安装脚本"
 echo "🌐 自动检测外网IP + 解决连接冲突"
 echo "🔌 单进程，多用户，同端口18889"
-echo "⚠️  【不可重复运行，需重置系统重装】"
+echo "🔄 支持重复运行，智能覆盖安装"
 echo "=========================================="
 
 # 检查root权限
@@ -20,11 +20,11 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# 检查是否已安装
+# 检查已有安装
+REINSTALL=false
 if [ -f "/etc/xray/serve.toml" ] || [ -f "/etc/xray-multi/config_eth0_11000.json" ]; then
-    echo "❌ 检测到已有安装，请重置系统后重新运行"
-    echo "   已存在配置文件，避免冲突"
-    exit 1
+    echo "🔄 检测到已有安装，将进行覆盖重装"
+    REINSTALL=true
 fi
 
 # 获取网卡IP
@@ -129,12 +129,16 @@ pkill -9 -f xray 2>/dev/null || true
 rm -rf /etc/xray /etc/xray-multi /var/log/xray-multi 2>/dev/null || true
 
 # 安装依赖
-echo "📦 安装依赖软件..."
-if command -v yum >/dev/null 2>&1; then
-    yum -y install wget unzip bind-utils net-tools curl >/dev/null 2>&1
-elif command -v apt >/dev/null 2>&1; then
-    apt update >/dev/null 2>&1
-    apt -y install wget unzip dnsutils net-tools curl >/dev/null 2>&1
+if [ "$REINSTALL" = true ]; then
+    echo "🔄 重装模式: 跳过依赖安装"
+else
+    echo "📦 安装依赖软件..."
+    if command -v yum >/dev/null 2>&1; then
+        yum -y install wget unzip bind-utils net-tools curl >/dev/null 2>&1
+    elif command -v apt >/dev/null 2>&1; then
+        apt update >/dev/null 2>&1
+        apt -y install wget unzip dnsutils net-tools curl >/dev/null 2>&1
+    fi
 fi
 
 # ====== 系统优化 ======
@@ -198,37 +202,45 @@ EOF
 echo "✅ 系统优化完成"
 
 # ====== 下载安装Xray ======
-echo "📥 下载Xray..."
-cd /tmp
-rm -f xray.zip xray
+echo "📥 检查Xray安装..."
 
-download_success=false
-for url in \
-    "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip" \
-    "https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray"
-do
-    if wget -q -O xray.zip "$url" --timeout=30; then
-        download_success=true
-        break
+# 检查是否已安装Xray
+if [ -f "/usr/local/bin/xray" ] && [ "$REINSTALL" = true ]; then
+    echo "✅ Xray已安装，版本: $(/usr/local/bin/xray version | head -1)"
+    echo "⏭️ 跳过下载，使用现有版本"
+else
+    echo "📥 下载Xray..."
+    cd /tmp
+    rm -f xray.zip xray
+
+    download_success=false
+    for url in \
+        "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip" \
+        "https://vip.123pan.cn/1816473155/%E6%8F%92%E4%BB%B6%E6%B3%A8%E5%86%8CIP/xray"
+    do
+        if wget -q -O xray.zip "$url" --timeout=30; then
+            download_success=true
+            break
+        fi
+    done
+
+    if [ "$download_success" = false ]; then
+        echo "❌ Xray下载失败，请检查网络"
+        exit 1
     fi
-done
 
-if [ "$download_success" = false ]; then
-    echo "❌ Xray下载失败，请检查网络"
-    exit 1
+    unzip -q -o xray.zip
+    if [ ! -f "xray" ]; then
+        echo "❌ Xray解压失败"
+        exit 1
+    fi
+
+    mv xray /usr/local/bin/
+    chmod +x /usr/local/bin/xray
+    rm -f xray.zip
+
+    echo "✅ Xray安装成功: $(/usr/local/bin/xray version | head -1)"
 fi
-
-unzip -q -o xray.zip
-if [ ! -f "xray" ]; then
-    echo "❌ Xray解压失败"
-    exit 1
-fi
-
-mv xray /usr/local/bin/
-chmod +x /usr/local/bin/xray
-rm -f xray.zip
-
-echo "✅ Xray安装成功: $(/usr/local/bin/xray version | head -1)"
 
 # ====== 创建优化的TOML配置 ======
 echo "⚙️ 生成TOML配置..."
