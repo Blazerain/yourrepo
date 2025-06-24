@@ -12,7 +12,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # 打印带颜色的信息
 print_info() {
@@ -44,10 +44,10 @@ update_system() {
     print_info "更新系统包管理器..."
     if command -v apt-get &> /dev/null; then
         apt-get update -y
-        apt-get install -y wget curl unzip
+        apt-get install -y wget curl unzip net-tools
     elif command -v yum &> /dev/null; then
         yum update -y
-        yum install -y wget curl unzip
+        yum install -y wget curl unzip net-tools
     else
         print_error "不支持的操作系统"
         exit 1
@@ -73,8 +73,35 @@ install_v2ray() {
 get_network_ips() {
     print_info "检测网卡IP地址..."
     
-    # 获取所有非回环地址（修复：获取每行的所有IP地址）
-    IPS=($(ip -br addr show | grep -v "127.0.0.1" | awk '{for(i=3;i<=NF;i++) print $i}' | cut -d'/' -f1 | grep -v '^
+    # 显示原始网卡信息用于调试
+    print_info "原始网卡信息:"
+    ip -br addr show | grep -v "127.0.0.1"
+    
+    # 获取所有非回环地址
+    IPS=()
+    while IFS= read -r line; do
+        # 提取每行的所有IP地址
+        ips_in_line=$(echo "$line" | awk '{for(i=3;i<=NF;i++) print $i}' | cut -d'/' -f1 | grep -v '^$')
+        while IFS= read -r ip; do
+            if [[ -n "$ip" ]]; then
+                IPS+=("$ip")
+            fi
+        done <<< "$ips_in_line"
+    done < <(ip -br addr show | grep -v "127.0.0.1")
+    
+    # 去重
+    IPS=($(printf '%s\n' "${IPS[@]}" | sort -u))
+    
+    if [ ${#IPS[@]} -eq 0 ]; then
+        print_error "未检测到可用的IP地址"
+        exit 1
+    fi
+    
+    print_info "检测到以下IP地址:"
+    for ip in "${IPS[@]}"; do
+        echo "  - $ip"
+    done
+}
 
 # 创建V2Ray配置文件
 create_config() {
@@ -95,8 +122,8 @@ create_config() {
         print_info "原配置文件已备份"
     fi
     
-    # 创建新配置
-    cat > "$CONFIG_PATH" << EOF
+    # 创建配置文件开头
+    cat > "$CONFIG_PATH" << 'EOF'
 {
   "log": {
     "loglevel": "warning"
@@ -121,7 +148,8 @@ EOF
 EOF
     done
 
-    cat >> "$CONFIG_PATH" << EOF
+    # 创建配置文件结尾
+    cat >> "$CONFIG_PATH" << 'EOF'
   ],
   "outbounds": [
     {
@@ -169,7 +197,7 @@ setup_firewall() {
         iptables -A INPUT -p udp --dport 18889 -j ACCEPT
         
         # 尝试保存iptables规则
-        if command -v iptables-save &> /dev/null; then
+        if [ -d "/etc/iptables" ]; then
             iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
         fi
         print_info "iptables防火墙规则已添加"
@@ -199,7 +227,7 @@ start_service() {
     # 验证配置文件
     V2RAY_BIN="/usr/local/bin/v2ray"
     if [ ! -f "$V2RAY_BIN" ]; then
-        V2RAY_BIN="/usr/bin/v2ray/v2ray"  # 兼容旧版本路径
+        V2RAY_BIN="/usr/bin/v2ray/v2ray"
     fi
     
     print_info "使用V2Ray可执行文件: $V2RAY_BIN"
@@ -214,7 +242,8 @@ start_service() {
     
     print_info "验证配置文件..."
     if ! $V2RAY_BIN test -config "$CONFIG_PATH"; then
-        print_error "配置文件验证失败，显示配置文件内容:"
+        print_error "配置文件验证失败"
+        print_info "配置文件内容:"
         cat "$CONFIG_PATH"
         exit 1
     fi
@@ -240,7 +269,9 @@ start_service() {
             print_success "端口18889监听正常"
             netstat -tlnp | grep ":18889 "
         else
-            print_warning "端口18889未在监听，可能需要检查配置"
+            print_warning "端口18889未在监听，显示调试信息..."
+            systemctl status v2ray --no-pager -l
+            journalctl -u v2ray --no-pager -l -n 10
         fi
     else
         print_error "V2Ray服务启动失败"
@@ -273,55 +304,49 @@ show_connection_info() {
     echo "加密: aes-128-gcm"
     echo
     print_warning "请确保防火墙开放了18889端口"
-    print_info "查看服务状态: systemctl status v2ray"
-    print_info "查看服务日志: journalctl -u v2ray -f"
-    print_info "重启服务: systemctl restart v2ray"
+    print_info "管理命令:"
+    echo "  查看服务状态: systemctl status v2ray"
+    echo "  查看服务日志: journalctl -u v2ray -f"
+    echo "  重启服务: systemctl restart v2ray"
+    echo "  停止服务: systemctl stop v2ray"
     echo
     print_info "故障排除命令:"
     echo "  检查端口监听: netstat -tlnp | grep 18889"
     echo "  测试配置文件: /usr/local/bin/v2ray test -config /usr/local/etc/v2ray/config.json"
-    echo "  手动启动调试: /usr/local/bin/v2ray run -config /usr/local/etc/v2ray/config.json"
 }
 
 # 调试模式函数
 debug_service() {
     print_info "========== 调试模式 =========="
     
-    # 显示配置文件路径和内容
     CONFIG_PATH="/usr/local/etc/v2ray/config.json"
     if [ ! -f "$CONFIG_PATH" ] && [ -f "/etc/v2ray/config.json" ]; then
         CONFIG_PATH="/etc/v2ray/config.json"
     fi
     
     print_info "配置文件路径: $CONFIG_PATH"
-    print_info "配置文件内容:"
-    cat "$CONFIG_PATH"
+    if [ -f "$CONFIG_PATH" ]; then
+        print_info "配置文件内容:"
+        cat "$CONFIG_PATH"
+    else
+        print_error "配置文件不存在"
+    fi
     echo
     
-    # 检查服务状态
     print_info "服务状态:"
     systemctl status v2ray --no-pager -l
     echo
     
-    # 显示日志
     print_info "最近20条日志:"
     journalctl -u v2ray --no-pager -l -n 20
     echo
     
-    # 检查端口
     print_info "端口监听状态:"
     netstat -tlnp | grep 18889 || echo "端口18889未在监听"
     echo
     
-    # 手动测试
-    print_info "手动测试V2Ray..."
-    V2RAY_BIN="/usr/local/bin/v2ray"
-    if [ ! -f "$V2RAY_BIN" ]; then
-        V2RAY_BIN="/usr/bin/v2ray/v2ray"
-    fi
-    
-    echo "执行: $V2RAY_BIN test -config $CONFIG_PATH"
-    $V2RAY_BIN test -config "$CONFIG_PATH"
+    print_info "网卡信息:"
+    ip -br addr show | grep -v "127.0.0.1"
 }
 
 # 主函数
@@ -330,7 +355,6 @@ main() {
     echo "    Shadowsocks多IP一键部署脚本"
     echo "========================================="
     
-    # 检查参数
     case "${1:-}" in
         "debug")
             debug_service
@@ -344,210 +368,6 @@ main() {
             exit 0
             ;;
     esac
-    
-    check_root
-    update_system
-    install_v2ray
-    get_network_ips
-    create_config
-    setup_firewall
-    start_service
-    show_connection_info
-}
-
-# 执行主函数
-main "$@" | sort -u))
-    
-    if [ ${#IPS[@]} -eq 0 ]; then
-        print_error "未检测到可用的IP地址"
-        exit 1
-    fi
-    
-    print_info "检测到以下IP地址:"
-    for ip in "${IPS[@]}"; do
-        echo "  - $ip"
-    done
-    
-    # 显示原始网卡信息用于调试
-    print_info "原始网卡信息:"
-    ip -br addr show | grep -v "127.0.0.1"
-}
-
-# 创建V2Ray配置文件
-create_config() {
-    print_info "创建V2Ray配置文件..."
-    
-    # 确保配置目录存在
-    mkdir -p /usr/local/etc/v2ray
-    
-    # 检查配置文件路径
-    CONFIG_PATH="/usr/local/etc/v2ray/config.json"
-    if [ ! -d "/usr/local/etc/v2ray" ] && [ -d "/etc/v2ray" ]; then
-        CONFIG_PATH="/etc/v2ray/config.json"
-    fi
-    
-    # 备份原配置
-    if [ -f "$CONFIG_PATH" ]; then
-        cp "$CONFIG_PATH" "${CONFIG_PATH}.backup.$(date +%s)"
-        print_info "原配置文件已备份"
-    fi
-    
-    # 创建新配置
-    cat > "$CONFIG_PATH" << EOF
-{
-  "log": {
-    "loglevel": "warning"
-  },
-  "inbounds": [
-EOF
-
-    # 为每个IP创建入站配置
-    for i in "${!IPS[@]}"; do
-        cat >> "$CONFIG_PATH" << EOF
-    {
-      "tag": "ss-${i}",
-      "port": 18889,
-      "listen": "${IPS[$i]}",
-      "protocol": "shadowsocks",
-      "settings": {
-        "method": "aes-128-gcm",
-        "password": "qwe123",
-        "network": "tcp,udp"
-      }
-    }$([ $i -lt $((${#IPS[@]} - 1)) ] && echo "," || echo "")
-EOF
-    done
-
-    cat >> "$CONFIG_PATH" << EOF
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {},
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "settings": {},
-      "tag": "blocked"
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "ip": [
-          "geoip:private"
-        ],
-        "outboundTag": "blocked"
-      }
-    ]
-  }
-}
-EOF
-
-    print_success "配置文件创建完成"
-}
-
-# 配置防火墙
-setup_firewall() {
-    print_info "配置防火墙..."
-    
-    # 检查并配置ufw
-    if command -v ufw &> /dev/null; then
-        ufw allow 18889/tcp
-        ufw allow 18889/udp
-        print_info "ufw防火墙规则已添加"
-    fi
-    
-    # 检查并配置iptables
-    if command -v iptables &> /dev/null; then
-        iptables -A INPUT -p tcp --dport 18889 -j ACCEPT
-        iptables -A INPUT -p udp --dport 18889 -j ACCEPT
-        
-        # 尝试保存iptables规则
-        if command -v iptables-save &> /dev/null; then
-            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-        fi
-        print_info "iptables防火墙规则已添加"
-    fi
-    
-    # 检查并配置firewalld
-    if command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --add-port=18889/tcp
-        firewall-cmd --permanent --add-port=18889/udp
-        firewall-cmd --reload
-        print_info "firewalld防火墙规则已添加"
-    fi
-}
-
-# 启动服务
-start_service() {
-    print_info "启动V2Ray服务..."
-    
-    # 检查配置文件路径
-    CONFIG_PATH="/usr/local/etc/v2ray/config.json"
-    if [ ! -f "$CONFIG_PATH" ] && [ -f "/etc/v2ray/config.json" ]; then
-        CONFIG_PATH="/etc/v2ray/config.json"
-    fi
-    
-    # 验证配置文件
-    V2RAY_BIN="/usr/local/bin/v2ray"
-    if [ ! -f "$V2RAY_BIN" ]; then
-        V2RAY_BIN="/usr/bin/v2ray/v2ray"  # 兼容旧版本路径
-    fi
-    
-    if ! $V2RAY_BIN test -config "$CONFIG_PATH"; then
-        print_error "配置文件验证失败"
-        exit 1
-    fi
-    
-    # 启动并设置开机自启
-    systemctl enable v2ray
-    systemctl start v2ray
-    
-    # 检查服务状态
-    sleep 2
-    if systemctl is-active --quiet v2ray; then
-        print_success "V2Ray服务启动成功"
-    else
-        print_error "V2Ray服务启动失败"
-        print_info "查看日志: journalctl -u v2ray -f"
-        exit 1
-    fi
-}
-
-# 显示连接信息
-show_connection_info() {
-    print_success "========== Shadowsocks部署完成 =========="
-    echo
-    print_info "连接信息:"
-    echo "端口: 18889"
-    echo "密码: qwe123"
-    echo "加密方式: aes-128-gcm"
-    echo
-    print_info "可用的服务器地址:"
-    for ip in "${IPS[@]}"; do
-        echo "  - ${ip}:18889"
-    done
-    echo
-    print_info "客户端配置示例:"
-    echo "服务器: ${IPS[0]}"
-    echo "端口: 18889"
-    echo "密码: qwe123"
-    echo "加密: aes-128-gcm"
-    echo
-    print_warning "请确保防火墙开放了18889端口"
-    print_info "查看服务状态: systemctl status v2ray"
-    print_info "查看服务日志: journalctl -u v2ray -f"
-    print_info "重启服务: systemctl restart v2ray"
-}
-
-# 主函数
-main() {
-    echo "========================================="
-    echo "    Shadowsocks多IP一键部署脚本"
-    echo "========================================="
     
     check_root
     update_system
