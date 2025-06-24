@@ -58,19 +58,13 @@ update_system() {
 install_v2ray() {
     print_info "下载并安装V2Ray..."
     
-    # 下载安装脚本
-    wget -O go.sh https://install.direct/go.sh
+    # 使用新的官方安装脚本
+    bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
     
-    if [ ! -f "go.sh" ]; then
-        print_error "下载V2Ray安装脚本失败"
+    if [ $? -ne 0 ]; then
+        print_error "V2Ray安装失败"
         exit 1
     fi
-    
-    # 执行安装
-    bash go.sh
-    
-    # 清理安装脚本
-    rm -f go.sh
     
     print_success "V2Ray安装完成"
 }
@@ -97,14 +91,23 @@ get_network_ips() {
 create_config() {
     print_info "创建V2Ray配置文件..."
     
+    # 确保配置目录存在
+    mkdir -p /usr/local/etc/v2ray
+    
+    # 检查配置文件路径
+    CONFIG_PATH="/usr/local/etc/v2ray/config.json"
+    if [ ! -d "/usr/local/etc/v2ray" ] && [ -d "/etc/v2ray" ]; then
+        CONFIG_PATH="/etc/v2ray/config.json"
+    fi
+    
     # 备份原配置
-    if [ -f "/etc/v2ray/config.json" ]; then
-        cp /etc/v2ray/config.json /etc/v2ray/config.json.backup.$(date +%s)
+    if [ -f "$CONFIG_PATH" ]; then
+        cp "$CONFIG_PATH" "${CONFIG_PATH}.backup.$(date +%s)"
         print_info "原配置文件已备份"
     fi
     
     # 创建新配置
-    cat > /etc/v2ray/config.json << EOF
+    cat > "$CONFIG_PATH" << EOF
 {
   "log": {
     "loglevel": "warning"
@@ -114,7 +117,7 @@ EOF
 
     # 为每个IP创建入站配置
     for i in "${!IPS[@]}"; do
-        cat >> /etc/v2ray/config.json << EOF
+        cat >> "$CONFIG_PATH" << EOF
     {
       "tag": "ss-${i}",
       "port": 18889,
@@ -129,7 +132,7 @@ EOF
 EOF
     done
 
-    cat >> /etc/v2ray/config.json << EOF
+    cat >> "$CONFIG_PATH" << EOF
   ],
   "outbounds": [
     {
@@ -196,8 +199,19 @@ setup_firewall() {
 start_service() {
     print_info "启动V2Ray服务..."
     
+    # 检查配置文件路径
+    CONFIG_PATH="/usr/local/etc/v2ray/config.json"
+    if [ ! -f "$CONFIG_PATH" ] && [ -f "/etc/v2ray/config.json" ]; then
+        CONFIG_PATH="/etc/v2ray/config.json"
+    fi
+    
     # 验证配置文件
-    if ! /usr/bin/v2ray/v2ray -test -config /etc/v2ray/config.json; then
+    V2RAY_BIN="/usr/local/bin/v2ray"
+    if [ ! -f "$V2RAY_BIN" ]; then
+        V2RAY_BIN="/usr/bin/v2ray/v2ray"  # 兼容旧版本路径
+    fi
+    
+    if ! $V2RAY_BIN test -config "$CONFIG_PATH"; then
         print_error "配置文件验证失败"
         exit 1
     fi
