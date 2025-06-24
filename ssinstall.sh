@@ -4,7 +4,7 @@
 # 加密方式: aes-256-gcm
 # 端口: 18889 (TCP+UDP)
 # 密码: qwe123
-# 自动检测所有公网IP     curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ssinstall.sh | bash 
+# 自动检测所有公网IP
 
 set -e
 
@@ -48,24 +48,67 @@ get_external_ip() {
 }
 
 echo "🔍 检测网卡配置..."
-eth0_ip=$(get_ip "eth0")
-eth1_ip=$(get_ip "eth1")
-eth1_1_ip=$(get_ip "eth1:1")
 
-# 存储配置信息
+# 更强力的IP检测方法
 declare -A CONFIG
-if [[ -n "$eth0_ip" ]]; then
-    CONFIG["eth0"]="$eth0_ip"
-    echo "✅ eth0: $eth0_ip"
-fi
-if [[ -n "$eth1_ip" ]]; then
-    CONFIG["eth1"]="$eth1_ip"
-    echo "✅ eth1: $eth1_ip"
-fi
-if [[ -n "$eth1_1_ip" ]] && [[ "$eth1_1_ip" != "$eth1_ip" ]]; then
-    CONFIG["eth1:1"]="$eth1_1_ip"
-    echo "✅ eth1:1: $eth1_1_ip"
-fi
+CONFIG_COUNT=0
+
+# 方法1: 检测常见网卡
+for interface in eth0 eth1 eth2 ens3 ens4 ens5; do
+    ip=$(get_ip "$interface")
+    if [[ -n "$ip" ]] && [[ "$ip" != "127.0.0.1" ]]; then
+        CONFIG["$interface"]="$ip"
+        echo "✅ $interface: $ip"
+        ((CONFIG_COUNT++))
+    fi
+done
+
+# 方法2: 检测子接口 (eth1:1格式)
+for main_if in eth0 eth1 eth2; do
+    for sub in 1 2 3; do
+        interface="${main_if}:${sub}"
+        ip=$(get_ip "$interface")
+        if [[ -n "$ip" ]] && [[ "$ip" != "127.0.0.1" ]]; then
+            # 检查是否已存在相同IP
+            duplicate=false
+            for existing_ip in "${CONFIG[@]}"; do
+                if [[ "$existing_ip" == "$ip" ]]; then
+                    duplicate=true
+                    break
+                fi
+            done
+            
+            if [[ "$duplicate" == false ]]; then
+                CONFIG["$interface"]="$ip"
+                echo "✅ $interface: $ip"
+                ((CONFIG_COUNT++))
+            fi
+        fi
+    done
+done
+
+# 方法3: 从已知IP强制添加 (根据您的netstat输出)
+known_ips=("172.17.18.14" "172.17.18.15" "172.17.18.16")
+for ip in "${known_ips[@]}"; do
+    # 检查IP是否已在CONFIG中
+    found=false
+    for existing_ip in "${CONFIG[@]}"; do
+        if [[ "$existing_ip" == "$ip" ]]; then
+            found=true
+            break
+        fi
+    done
+    
+    if [[ "$found" == false ]]; then
+        # 尝试找到对应的接口
+        interface=$(ip addr show | grep "$ip" | head -1 | awk '{print $NF}' 2>/dev/null || echo "unknown")
+        if [[ -n "$interface" ]] && [[ "$interface" != "unknown" ]]; then
+            CONFIG["$interface"]="$ip"
+            echo "✅ $interface: $ip (强制检测)"
+            ((CONFIG_COUNT++))
+        fi
+    fi
+done
 
 if [[ ${#CONFIG[@]} -eq 0 ]]; then
     echo "❌ 未检测到可用的网络接口"
@@ -87,44 +130,82 @@ sleep 2
 # 安装依赖
 echo "📦 安装依赖..."
 if command -v yum >/dev/null 2>&1; then
-    # CentOS/RHEL
-    yum update -y >/dev/null 2>&1
-    yum install -y epel-release >/dev/null 2>&1
-    yum install -y wget curl net-tools >/dev/null 2>&1
+    # CentOS/RHEL - 超时控制和错误处理
+    echo "  检测到yum包管理器..."
     
-    # 安装shadowsocks-libev
+    timeout 300 yum update -y >/dev/null 2>&1 || echo "  ⚠️ yum update超时，继续安装..."
+    timeout 180 yum install -y epel-release >/dev/null 2>&1 || echo "  ⚠️ epel-release安装可能失败，继续..."
+    timeout 300 yum install -y wget curl net-tools >/dev/null 2>&1 || echo "  ⚠️ 基础工具安装可能失败，继续..."
+    
+    # 尝试安装shadowsocks-libev
     if ! command -v ss-server >/dev/null 2>&1; then
         echo "📥 安装shadowsocks-libev..."
-        yum install -y shadowsocks-libev >/dev/null 2>&1 || {
-            # 如果yum安装失败，使用编译安装
-            echo "⚠️ yum安装失败，使用编译安装..."
-            yum install -y gcc gettext autoconf libtool automake make pcre-devel asciidoc xmlto c-ares-devel libev-devel libsodium-devel mbedtls-devel >/dev/null 2>&1
+        
+        # 先尝试简单安装
+        if ! timeout 300 yum install -y shadowsocks-libev >/dev/null 2>&1; then
+            echo "  ⚠️ yum安装shadowsocks-libev失败，尝试其他方法..."
             
+            # 方法2: 手动下载预编译版本
+            echo "  📥 下载预编译版本..."
             cd /tmp
-            wget -q https://github.com/shadowsocks/shadowsocks-libev/releases/download/v3.3.5/shadowsocks-libev-3.3.5.tar.gz
-            tar -xzf shadowsocks-libev-3.3.5.tar.gz
-            cd shadowsocks-libev-3.3.5
-            ./configure --prefix=/usr/local >/dev/null 2>&1
-            make -j$(nproc) >/dev/null 2>&1
-            make install >/dev/null 2>&1
-            
-            # 创建软链接
-            ln -sf /usr/local/bin/ss-server /usr/bin/ss-server
-        }
+            if wget -q --timeout=30 "https://github.com/shadowsocks/shadowsocks-libev/releases/download/v3.3.5/shadowsocks-libev-3.3.5.tar.gz"; then
+                echo "  ⚠️ 需要编译安装，可能较慢..."
+                
+                # 安装编译依赖
+                timeout 300 yum install -y gcc gettext autoconf libtool automake make pcre-devel asciidoc xmlto c-ares-devel libev-devel libsodium-devel mbedtls-devel >/dev/null 2>&1 || {
+                    echo "  ❌ 编译依赖安装失败，尝试简化安装..."
+                    timeout 300 yum install -y gcc make >/dev/null 2>&1
+                }
+                
+                tar -xzf shadowsocks-libev-3.3.5.tar.gz 2>/dev/null || echo "  ⚠️ 解压可能有问题..."
+                cd shadowsocks-libev-3.3.5 2>/dev/null || {
+                    echo "  ❌ 编译安装失败，跳过..."
+                    cd /tmp
+                }
+                
+                if [ -d "shadowsocks-libev-3.3.5" ]; then
+                    cd shadowsocks-libev-3.3.5
+                    ./configure --prefix=/usr/local >/dev/null 2>&1 && \
+                    make -j2 >/dev/null 2>&1 && \
+                    make install >/dev/null 2>&1 && \
+                    ln -sf /usr/local/bin/ss-server /usr/bin/ss-server
+                fi
+            else
+                echo "  ❌ 下载失败，请检查网络连接"
+            fi
+        fi
     fi
+    
 elif command -v apt >/dev/null 2>&1; then
-    # Ubuntu/Debian
-    apt update -y >/dev/null 2>&1
-    apt install -y wget curl net-tools shadowsocks-libev >/dev/null 2>&1
+    # Ubuntu/Debian - 超时控制
+    echo "  检测到apt包管理器..."
+    timeout 300 apt update -y >/dev/null 2>&1 || echo "  ⚠️ apt update超时，继续..."
+    timeout 300 apt install -y wget curl net-tools shadowsocks-libev >/dev/null 2>&1 || echo "  ⚠️ 安装可能失败，继续..."
+else
+    echo "  ⚠️ 未识别的包管理器，尝试手动安装..."
 fi
 
 # 验证安装
-if ! command -v ss-server >/dev/null 2>&1; then
-    echo "❌ shadowsocks-libev安装失败"
-    exit 1
+echo "🔍 验证shadowsocks安装..."
+if command -v ss-server >/dev/null 2>&1; then
+    echo "✅ shadowsocks-libev安装成功: $(ss-server --help 2>&1 | head -1 | grep -o 'shadowsocks-libev' || echo 'ss-server')"
+else
+    echo "⚠️ shadowsocks-libev未找到，尝试使用Go版本替代..."
+    
+    # 使用Go版本shadowsocks2作为备用
+    cd /tmp
+    if wget -q --timeout=30 "https://github.com/shadowsocks/go-shadowsocks2/releases/download/v0.1.5/shadowsocks2-linux.gz"; then
+        gunzip shadowsocks2-linux.gz
+        chmod +x shadowsocks2-linux
+        mv shadowsocks2-linux /usr/local/bin/ss-server-go
+        ln -sf /usr/local/bin/ss-server-go /usr/bin/ss-server
+        echo "✅ 使用Go版本shadowsocks2"
+        USE_GO_VERSION=true
+    else
+        echo "❌ shadowsocks安装失败，请手动安装"
+        exit 1
+    fi
 fi
-
-echo "✅ shadowsocks-libev安装成功: $(ss-server --help | head -1 2>/dev/null || echo 'shadowsocks-libev')"
 
 # 创建配置目录
 mkdir -p /etc/shadowsocks-libev
