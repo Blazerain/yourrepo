@@ -1,18 +1,17 @@
 #!/bin/bash
 
 # 稳定版多公网IP服务器SOCKS5代理安装脚本
-# 修复监听配置，支持外部连接，简化复杂操作
-# 端口: 11000, 12000, 13000
-# 用户: vip1-vip10/123456 (支持多用户)
+# 修复语法错误，简化复杂操作
+# 每个IP分配5个端口：11000-11400, 12000-12400, 13000-13400
+# 用户: vip/123456 (单用户多端口)
 # 使用方法: curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/multi_ip_dns_install.sh | bash
 set -e
 
 echo "=========================================="
 echo "🚀 稳定版多IP SOCKS5安装"
 echo "🌐 集成Beanfun游戏DNS优化"
-echo "🔌 固定端口: 11000, 12000, 13000"
-echo "👥 多用户: vip1-vip10/123456"
-echo "🌍 支持外部机器连接"
+echo "🔌 多端口: 每IP分配5个端口"
+echo "👤 单用户: vip/123456"
 echo "=========================================="
 
 # 检查root权限
@@ -32,19 +31,19 @@ eth0_ip=$(get_ip "eth0")
 eth1_ip=$(get_ip "eth1")
 eth1_1_ip=$(get_ip "eth1:1")
 
-# 配置端口映射（固定），但监听在0.0.0.0
+# 配置端口映射（每个IP分配5个端口）
 declare -A CONFIG
 if [[ -n "$eth0_ip" ]]; then
-    CONFIG["eth0"]="$eth0_ip:11000"
-    echo "✅ eth0: $eth0_ip -> 11000 (监听0.0.0.0)"
+    CONFIG["eth0"]="$eth0_ip:11000,11100,11200,11300,11400"
+    echo "✅ eth0: $eth0_ip -> 11000,11100,11200,11300,11400"
 fi
 if [[ -n "$eth1_ip" ]]; then
-    CONFIG["eth1"]="$eth1_ip:12000"
-    echo "✅ eth1: $eth1_ip -> 12000 (监听0.0.0.0)"
+    CONFIG["eth1"]="$eth1_ip:12000,12100,12200,12300,12400"
+    echo "✅ eth1: $eth1_ip -> 12000,12100,12200,12300,12400"
 fi
 if [[ -n "$eth1_1_ip" ]] && [[ "$eth1_1_ip" != "$eth1_ip" ]]; then
-    CONFIG["eth1:1"]="$eth1_1_ip:13000"
-    echo "✅ eth1:1: $eth1_1_ip -> 13000 (监听0.0.0.0)"
+    CONFIG["eth1:1"]="$eth1_1_ip:13000,13100,13200,13300,13400"
+    echo "✅ eth1:1: $eth1_1_ip -> 13000,13100,13200,13300,13400"
 fi
 
 if [[ ${#CONFIG[@]} -lt 2 ]]; then
@@ -168,16 +167,50 @@ mkdir -p /etc/xray-multi /var/log/xray-multi
 
 # ====== 为每个IP创建配置 ======
 echo "=========================================="
-echo "⚙️ 为每个IP创建配置 (监听0.0.0.0)"
+echo "⚙️ 为每个IP创建多端口配置"
 echo "=========================================="
 
 config_count=0
 for interface in "${!CONFIG[@]}"; do
-    IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
+    IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+    IFS=',' read -ra PORT_ARRAY <<< "$ports"
     
     config_file="/etc/xray-multi/config_${interface//:/_}.json"
     
-    # 创建配置文件 - 监听在0.0.0.0以支持外部连接
+    # 构建inbounds数组
+    inbounds_json=""
+    for i in "${!PORT_ARRAY[@]}"; do
+        port="${PORT_ARRAY[$i]}"
+        
+        if [ $i -gt 0 ]; then
+            inbounds_json="${inbounds_json},"
+        fi
+        
+        inbounds_json="${inbounds_json}
+    {
+      \"tag\": \"socks5-in-${interface//:/_}-${port}\",
+      \"port\": $port,
+      \"protocol\": \"socks\",
+      \"listen\": \"0.0.0.0\",
+      \"settings\": {
+        \"auth\": \"password\",
+        \"accounts\": [
+          {
+            \"user\": \"vip\",
+            \"pass\": \"123456\"
+          }
+        ],
+        \"udp\": true
+      },
+      \"sniffing\": {
+        \"enabled\": true,
+        \"destOverride\": [\"http\", \"tls\", \"quic\"],
+        \"domainsExcluded\": [\"courier.push.apple.com\"]
+      }
+    }"
+    done
+    
+    # 创建配置文件
     cat > "$config_file" << CONFIGEOF
 {
   "log": {
@@ -213,64 +246,7 @@ for interface in "${!CONFIG[@]}"; do
     "clientIp": "1.2.3.4",
     "tag": "dns-inbound"
   },
-  "inbounds": [
-    {
-      "tag": "socks5-in-${interface//:/_}",
-      "port": $port,
-      "protocol": "socks",
-      "listen": "0.0.0.0",
-      "settings": {
-        "auth": "password",
-        "accounts": [
-          {
-            "user": "vip1",
-            "pass": "123456"
-          },
-          {
-            "user": "vip2", 
-            "pass": "123456"
-          },
-          {
-            "user": "vip3",
-            "pass": "123456"
-          },
-          {
-            "user": "vip4",
-            "pass": "123456"
-          },
-          {
-            "user": "vip5",
-            "pass": "123456"
-          },
-          {
-            "user": "vip6",
-            "pass": "123456"
-          },
-          {
-            "user": "vip7",
-            "pass": "123456"
-          },
-          {
-            "user": "vip8",
-            "pass": "123456"
-          },
-          {
-            "user": "vip9",
-            "pass": "123456"
-          },
-          {
-            "user": "vip10",
-            "pass": "123456"
-          }
-        ],
-        "udp": true
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
-        "domainsExcluded": ["courier.push.apple.com"]
-      }
-    }
+  "inbounds": [$inbounds_json
   ],
   "outbounds": [
     {
@@ -344,7 +320,7 @@ for interface in "${!CONFIG[@]}"; do
 }
 CONFIGEOF
 
-    echo "✅ 配置: $interface ($ip) -> 端口$port (监听0.0.0.0)"
+    echo "✅ 配置: $interface ($ip) -> 端口: ${ports}"
     
     # 验证配置语法
     if /usr/local/bin/xray test -config "$config_file" >/dev/null 2>&1; then
@@ -451,12 +427,17 @@ iptables -F
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT -p tcp --dport 11000 -j ACCEPT
-iptables -A INPUT -p udp --dport 11000 -j ACCEPT
-iptables -A INPUT -p tcp --dport 12000 -j ACCEPT
-iptables -A INPUT -p udp --dport 12000 -j ACCEPT
-iptables -A INPUT -p tcp --dport 13000 -j ACCEPT
-iptables -A INPUT -p udp --dport 13000 -j ACCEPT
+
+# 开放所有配置的端口
+for interface in "${!CONFIG[@]}"; do
+    IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+    IFS=',' read -ra PORT_ARRAY <<< "$ports"
+    
+    for port in "${PORT_ARRAY[@]}"; do
+        iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
+        iptables -A INPUT -p udp --dport "$port" -j ACCEPT
+    done
+done
 
 # 保存防火墙规则
 service iptables save 2>/dev/null || iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
@@ -509,89 +490,22 @@ fi
 
 echo ""
 echo "🔧 代理端口状态:"
-for port in 11000 12000 13000; do
-    echo -n "  端口 $port: "
-    if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
-        echo "✅ 监听正常 (0.0.0.0)"
-    elif netstat -tlnp 2>/dev/null | grep -q ":$port "; then
-        echo "⚠️ 监听但IP受限"
-    else
-        echo "❌ 未监听"
-    fi
+# 检查所有配置的端口
+for port_group in "11000,11100,11200,11300,11400" "12000,12100,12200,12300,12400" "13000,13100,13200,13300,13400"; do
+    IFS=',' read -ra PORTS <<< "$port_group"
+    echo "端口组 ${PORTS[0]%??}xx:"
+    for port in "${PORTS[@]}"; do
+        echo -n "  端口 $port: "
+        if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
+            echo "✅ 监听正常"
+        else
+            echo "❌ 未监听"
+        fi
+    done
 done
 DNSEOF
 
 chmod +x /usr/local/bin/beanfun-dns-test.sh
-
-# 配置检查和修复工具
-cat > /usr/local/bin/xray-config-check.sh << 'CHECKEOF'
-#!/bin/bash
-
-echo "==========================================="
-echo "🔧 Xray配置检查工具"
-echo "==========================================="
-
-CONFIG_DIR="/etc/xray-multi"
-
-if [ ! -d "$CONFIG_DIR" ]; then
-    echo "❌ 配置目录不存在: $CONFIG_DIR"
-    exit 1
-fi
-
-echo "🔍 检查配置文件..."
-
-for config in "$CONFIG_DIR"/config_*.json; do
-    if [ -f "$config" ]; then
-        echo ""
-        echo "📄 检查: $(basename "$config")"
-        
-        # 语法检查
-        if /usr/local/bin/xray test -config "$config" 2>/dev/null; then
-            echo "  ✅ JSON语法正确"
-        else
-            echo "  ❌ JSON语法错误:"
-            /usr/local/bin/xray test -config "$config"
-        fi
-        
-        # 检查监听地址
-        listen_addr=$(grep -o '"listen": "[^"]*"' "$config" | grep -o '[^"]*"$' | tr -d '"')
-        echo "  🌍 监听地址: $listen_addr"
-        if [ "$listen_addr" = "0.0.0.0" ]; then
-            echo "    ✅ 支持外部连接"
-        else
-            echo "    ⚠️ 可能只支持内网连接"
-        fi
-        
-        # 检查用户配置
-        if grep -q '"user": "vip1"' "$config" && grep -q '"user": "vip10"' "$config"; then
-            user_count=$(grep -c '"user": "vip' "$config")
-            echo "  👥 用户账号: $user_count 个"
-        else
-            echo "  ❌ 用户配置可能有问题"
-        fi
-        
-        # 检查端口配置
-        port=$(grep -o '"port": [0-9]*' "$config" | grep -o '[0-9]*')
-        if [ -n "$port" ]; then
-            echo "  🔌 配置端口: $port"
-            if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
-                echo "    ✅ 端口正在监听 (0.0.0.0)"
-            elif netstat -tlnp 2>/dev/null | grep -q ":$port "; then
-                echo "    ⚠️ 端口监听但IP受限"
-            else
-                echo "    ❌ 端口未监听"
-            fi
-        fi
-    fi
-done
-
-echo ""
-echo "🧪 测试多用户连接:"
-echo "curl --socks5 vip1:123456@服务器IP:11000 https://httpbin.org/ip --connect-timeout 10"
-echo "curl --socks5 vip2:123456@服务器IP:12000 https://httpbin.org/ip --connect-timeout 10"
-CHECKEOF
-
-chmod +x /usr/local/bin/xray-config-check.sh
 
 # ====== 启动服务 ======
 echo "=========================================="
@@ -630,16 +544,18 @@ sleep 5
 ALL_WORKING=true
 
 for interface in "${!CONFIG[@]}"; do
-    IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
-    if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
-        echo "✅ $interface -> 端口$port (0.0.0.0) 正常"
-    elif netstat -tlnp 2>/dev/null | grep -q ":$port "; then
-        echo "⚠️ $interface -> 端口$port 监听但IP受限"
-        ALL_WORKING=false
-    else
-        echo "❌ $interface -> 端口$port 异常"
-        ALL_WORKING=false
-    fi
+    IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+    IFS=',' read -ra PORT_ARRAY <<< "$ports"
+    
+    echo "检查 $interface ($ip):"
+    for port in "${PORT_ARRAY[@]}"; do
+        if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
+            echo "  ✅ 端口$port 正常"
+        else
+            echo "  ❌ 端口$port 异常"
+            ALL_WORKING=false
+        fi
+    done
 done
 
 # 执行DNS测试
@@ -654,15 +570,15 @@ echo ""
 echo "📝 生成配置文件..."
 cat > ~/Multi_IP_Socks5_Config.txt << USEREOF
 #############################################################################
-🎯 稳定版多IP SOCKS5代理配置 (支持外部连接)
+🎯 稳定版多IP SOCKS5代理配置 (单用户多端口版)
 
 📡 服务器信息:
 公网IP: $SERVER_IP
 检测到接口数: ${#CONFIG[@]}
-监听方式: 0.0.0.0 (支持所有外部机器连接)
 
-👥 支持用户账号 (密码都是123456):
-vip1, vip2, vip3, vip4, vip5, vip6, vip7, vip8, vip9, vip10
+👤 统一用户账号:
+用户名: vip
+密码: 123456
 
 🌐 Beanfun DNS优化 (已集成):
 ✅ hk.beanfun.com -> 112.121.124.11
@@ -673,40 +589,40 @@ vip1, vip2, vip3, vip4, vip5, vip6, vip7, vip8, vip9, vip10
 ✅ beanfun.com -> 52.147.74.109
 ✅ 阻止污染IP: 31.13.106.4
 
-🔌 独立代理服务配置:
+🔌 多端口代理服务配置:
 USEREOF
 
 for interface in "${!CONFIG[@]}"; do
-    IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
-    
-    # 检查端口状态
-    if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
-        status="运行正常 (0.0.0.0)"
-    elif netstat -tlnp 2>/dev/null | grep -q ":$port "; then
-        status="运行但IP受限"
-    else
-        status="异常"
-    fi
+    IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+    IFS=',' read -ra PORT_ARRAY <<< "$ports"
     
     cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF2
 📌 $interface (内网IP: $ip):
-   代理地址: $SERVER_IP:$port
-   支持用户: vip1-vip10 (任选一个)
-   密码: 123456
-   状态: $status
-   
-   🔗 多机器连接测试:
-   机器1: curl --socks5 vip1:123456@$SERVER_IP:$port https://httpbin.org/ip
-   机器2: curl --socks5 vip2:123456@$SERVER_IP:$port https://httpbin.org/ip
-   机器3: curl --socks5 vip3:123456@$SERVER_IP:$port https://httpbin.org/ip
-   
-   🎮 Beanfun测试:
-   curl --socks5-hostname vip1:123456@$SERVER_IP:$port https://bfweb.hk.beanfun.com
-
 USEREOF2
+
+    for port in "${PORT_ARRAY[@]}"; do
+        # 检查端口状态
+        if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
+            status="运行正常"
+        else
+            status="异常"
+        fi
+        
+        cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF3
+   端口 $port:
+     代理地址: $SERVER_IP:$port
+     用户名: vip
+     密码: 123456
+     状态: $status
+     测试: curl --socks5 vip:123456@$SERVER_IP:$port https://httpbin.org/ip
+     
+USEREOF3
+    done
+    
+    echo "" >> ~/Multi_IP_Socks5_Config.txt
 done
 
-cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF3
+cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF4
 
 ⚙️ 服务管理:
 启动: systemctl start xray-multi
@@ -716,58 +632,61 @@ cat >> ~/Multi_IP_Socks5_Config.txt << USEREOF3
 
 🔧 管理工具:
 DNS测试: /usr/local/bin/beanfun-dns-test.sh
-配置检查: /usr/local/bin/xray-config-check.sh
 手动启动: /usr/local/bin/xray-multi-start.sh
 手动停止: /usr/local/bin/xray-multi-stop.sh
 
 🎮 客户端配置要点:
 - 代理类型: SOCKS5
 - 服务器: $SERVER_IP  
-- 端口: 11000/12000/13000 (选择一个)
-- 用户名: vip1-vip10 (任选一个)
+- 端口: 选择任意可用端口
+- 用户名: vip
 - 密码: 123456
 - 🚨 重要: 启用"代理DNS查询"或"远程DNS解析"
 - Firefox设置: network.proxy.socks_remote_dns = true
 
 💡 多机器使用建议:
-1. 现在监听在0.0.0.0，支持任意外部机器连接
-2. 不同机器可以使用不同vip用户连接同一端口
-3. 同一端口可以同时支持10个不同用户连接
-4. 建议为不同机器/客户分配固定的vip账号
+1. 不同机器使用不同端口，避免冲突
+2. 同一用户名vip可以在所有端口使用
+3. 每个端口都包含完整的Beanfun优化配置
+4. 端口分配建议:
+   - 机器A: 使用11xxx端口
+   - 机器B: 使用12xxx端口  
+   - 机器C: 使用13xxx端口
 
-🧪 连接测试命令:
-# 2台机器连接同一端口不同用户示例
-机器A: curl --socks5 vip1:123456@$SERVER_IP:11000 https://httpbin.org/ip
-机器B: curl --socks5 vip2:123456@$SERVER_IP:11000 https://httpbin.org/ip
+🧪 快速测试示例:
+curl --socks5 vip:123456@$SERVER_IP:11000 https://httpbin.org/ip
+curl --socks5 vip:123456@$SERVER_IP:12000 https://httpbin.org/ip
+curl --socks5 vip:123456@$SERVER_IP:13000 https://httpbin.org/ip
 
 安装时间: $(date)
-版本: 稳定版 v3.0 (修复外部连接问题，支持多机器多用户)
+版本: 稳定版 v4.0 (单用户多端口版本)
 #############################################################################
-USEREOF3
+USEREOF4
 
 # 最终状态报告
 echo ""
 echo "=========================================="
-echo "🎉 稳定版多IP多用户SOCKS5安装完成！"
+echo "🎉 稳定版多IP多端口SOCKS5安装完成！"
 echo "=========================================="
 echo "🌐 服务器公网IP: $SERVER_IP"
 echo "🔌 检测到 ${#CONFIG[@]} 个网络接口"
-echo "👥 支持用户: vip1-vip10 (密码:123456)"
-echo "🌍 监听方式: 0.0.0.0 (支持外部连接)"
+echo "👤 统一用户: vip/123456"
 echo ""
 
 for interface in "${!CONFIG[@]}"; do
-    IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
+    IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+    IFS=',' read -ra PORT_ARRAY <<< "$ports"
     
-    if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
-        status="✅ 正常 (0.0.0.0)"
-    elif netstat -tlnp 2>/dev/null | grep -q ":$port "; then
-        status="⚠️ 监听但IP受限"
-    else
-        status="❌ 异常"
-    fi
+    working_count=0
+    total_count=${#PORT_ARRAY[@]}
     
-    echo "📌 $interface ($ip): 端口$port $status"
+    for port in "${PORT_ARRAY[@]}"; do
+        if netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:$port "; then
+            ((working_count++))
+        fi
+    done
+    
+    echo "📌 $interface ($ip): $working_count/$total_count 端口正常 (${PORT_ARRAY[*]})"
 done
 
 echo ""
@@ -775,33 +694,32 @@ echo "📄 详细配置: ~/Multi_IP_Socks5_Config.txt"
 echo ""
 
 if [[ "$ALL_WORKING" == "true" ]]; then
-    echo "🎯 所有服务正常运行！支持外部机器连接！"
+    echo "🎯 所有服务正常运行！"
     echo ""
-    echo "🧪 2台机器不同用户测试示例:"
+    echo "🧪 快速测试示例 (不同端口):"
     for interface in "${!CONFIG[@]}"; do
-        IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
-        echo "   机器1: curl --socks5 vip1:123456@$SERVER_IP:$port https://httpbin.org/ip"
-        echo "   机器2: curl --socks5 vip2:123456@$SERVER_IP:$port https://httpbin.org/ip"
-        echo "   机器3: curl --socks5 vip3:123456@$SERVER_IP:$port https://httpbin.org/ip"
+        IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+        IFS=',' read -ra PORT_ARRAY <<< "$ports"
+        echo "   curl --socks5 vip:123456@$SERVER_IP:${PORT_ARRAY[0]} https://httpbin.org/ip"
         break
     done
     echo ""
     echo "🌐 Beanfun测试:"
     for interface in "${!CONFIG[@]}"; do
-        IFS=':' read -r ip port <<< "${CONFIG[$interface]}"
-        echo "   curl --socks5-hostname vip1:123456@$SERVER_IP:$port https://bfweb.hk.beanfun.com"
+        IFS=':' read -r ip ports <<< "${CONFIG[$interface]}"
+        IFS=',' read -ra PORT_ARRAY <<< "$ports"
+        echo "   curl --socks5-hostname vip:123456@$SERVER_IP:${PORT_ARRAY[0]} https://bfweb.hk.beanfun.com"
         break
     done
 else
     echo "⚠️ 部分服务可能存在问题，请检查:"
     echo "   systemctl status xray-multi"
-    echo "   /usr/local/bin/xray-config-check.sh"
+    echo "   /usr/local/bin/beanfun-dns-test.sh"
 fi
 
 echo ""
 echo "🔧 常用命令:"
 echo "   DNS测试: /usr/local/bin/beanfun-dns-test.sh"
-echo "   配置检查: /usr/local/bin/xray-config-check.sh"
 echo "   服务状态: systemctl status xray-multi"
 echo "   重启服务: systemctl restart xray-multi"
 
@@ -810,6 +728,6 @@ cd /
 rm -rf /tmp/xray*
 
 echo ""
-echo "🎊 安装完成！稳定版多IP多用户代理服务已就绪！"
-echo "🌍 现在支持外部机器连接，每个端口支持10个不同用户！"
+echo "🎊 安装完成！稳定版多IP多端口代理服务已就绪！"
+echo "🌐 每个IP分配5个端口，统一使用 vip/123456 账号！"
 echo "🔗 详细配置信息请查看: ~/Multi_IP_Socks5_Config.txt"
