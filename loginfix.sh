@@ -1,9 +1,16 @@
 #!/bin/bash
 
-# Xray多出口配置自动生成脚本
+# Xray多出口配置自动生成脚本 - 使用Python生成JSON
 # 实现一个IP入口对应一个IP出口
 
 echo "=== Xray多出口配置自动生成脚本 ==="
+
+# 检查Python是否可用
+if ! command -v python3 &> /dev/null; then
+    echo "错误: 需要Python3来生成JSON配置"
+    echo "请安装Python3: yum install python3 或 apt install python3"
+    exit 1
+fi
 
 # 获取内网IP列表（排除127.0.0.1）
 echo "正在获取内网IP..."
@@ -61,219 +68,173 @@ fi
 
 echo "正在生成新的配置文件..."
 
-# 创建临时文件来构建JSON
-TEMP_FILE=$(mktemp)
+# 使用Python生成JSON配置
+python3 << EOF > "$CONFIG_FILE"
+import json
+import sys
 
-cat > "$TEMP_FILE" << 'EOF'
-{
-  "log": {
-    "access": "/var/log/xray/access.log",
-    "error": "/var/log/xray/error.log",
-    "loglevel": "warning"
-  },
-  "dns": {},
-  "api": {
-    "tag": "api",
-    "services": [
-      "HandlerService",
-      "LoggerService",
-      "StatsService"
-    ]
-  },
-  "stats": {},
-  "policy": {
-    "levels": {
-      "0": {
-        "handshake": 2,
-        "connIdle": 147,
-        "uplinkOnly": 8,
-        "downlinkOnly": 9,
-        "statsUserUplink": true,
-        "statsUserDownlink": true
-      }
+# 从bash传入的数据
+ips = [$(printf '"%s",' "${IPS[@]:0:$NUM_IPS}" | sed 's/,$//')] 
+uuids = [$(printf '"%s",' "${UUIDS[@]:0:$NUM_IPS}" | sed 's/,$//')] 
+interfaces = {$(for ip in "${IPS[@]:0:$NUM_IPS}"; do echo "\"$ip\": \"${IP_INTERFACES[$ip]}\","; done | sed 's/,$//')}
+
+# 构建基础配置
+config = {
+    "log": {
+        "access": "/var/log/xray/access.log",
+        "error": "/var/log/xray/error.log",
+        "loglevel": "warning"
     },
-    "system": {
-      "statsInboundUplink": true,
-      "statsInboundDownlink": true,
-      "statsOutboundUplink": true,
-      "statsOutboundDownlink": true
-    }
-  },
-  "routing": {
-    "domainStrategy": "IPIfNonMatch",
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": [
-          "api"
-        ],
-        "outboundTag": "api"
-      },
-EOF
+    "dns": {},
+    "api": {
+        "tag": "api",
+        "services": [
+            "HandlerService",
+            "LoggerService",
+            "StatsService"
+        ]
+    },
+    "stats": {},
+    "policy": {
+        "levels": {
+            "0": {
+                "handshake": 2,
+                "connIdle": 147,
+                "uplinkOnly": 8,
+                "downlinkOnly": 9,
+                "statsUserUplink": True,
+                "statsUserDownlink": True
+            }
+        },
+        "system": {
+            "statsInboundUplink": True,
+            "statsInboundDownlink": True,
+            "statsOutboundUplink": True,
+            "statsOutboundDownlink": True
+        }
+    },
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "inboundTag": ["api"],
+                "outboundTag": "api"
+            }
+        ]
+    },
+    "inbounds": [
+        {
+            "tag": "api",
+            "port": 1476,
+            "listen": "127.0.0.1",
+            "protocol": "dokodemo-door",
+            "settings": {
+                "address": "127.0.0.1"
+            }
+        }
+    ],
+    "outbounds": []
+}
 
-# 添加路由规则 - 每个入口对应一个出口
-for ((i=0; i<NUM_IPS; i++)); do
-    cat >> "$TEMP_FILE" << EOF
-      {
+# 添加每个IP的路由规则
+for i, ip in enumerate(ips):
+    # 添加路由规则
+    config["routing"]["rules"].insert(-1 if len(config["routing"]["rules"]) > 1 else 0, {
         "type": "field",
-        "inboundTag": [
-          "vmess-ip$((i+1))"
-        ],
-        "outboundTag": "out-ip$((i+1))"
-      },
-EOF
-done
+        "inboundTag": [f"vmess-ip{i+1}"],
+        "outboundTag": f"out-ip{i+1}"
+    })
+    
+    # 添加入站配置
+    config["inbounds"].append({
+        "tag": f"vmess-ip{i+1}",
+        "port": 10001 + i,
+        "listen": ip,
+        "protocol": "vmess",
+        "settings": {
+            "clients": [
+                {
+                    "id": uuids[i],
+                    "email": f"user{i+1}@example.com"
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": "tcp"
+        }
+    })
+    
+    # 添加出站配置
+    outbound = {
+        "tag": f"out-ip{i+1}",
+        "protocol": "freedom",
+        "settings": {
+            "domainStrategy": "UseIP"
+        }
+    }
+    
+    # 如果有特定接口，添加sockopt
+    if interfaces[ip] != "default":
+        outbound["streamSettings"] = {
+            "sockopt": {
+                "interface": interfaces[ip]
+            }
+        }
+    
+    config["outbounds"].append(outbound)
 
 # 添加其他路由规则
-cat >> "$TEMP_FILE" << 'EOF'
-      {
+config["routing"]["rules"].extend([
+    {
         "type": "field",
-        "protocol": [
-          "bittorrent"
-        ],
+        "protocol": ["bittorrent"],
         "marktag": "ban_bt",
         "outboundTag": "block"
-      },
-      {
+    },
+    {
         "type": "field",
-        "ip": [
-          "geoip:cn"
-        ],
+        "ip": ["geoip:cn"],
         "marktag": "ban_geoip_cn",
         "outboundTag": "block"
-      },
-      {
+    },
+    {
         "type": "field",
-        "domain": [
-          "geosite:openai"
-        ],
+        "domain": ["geosite:openai"],
         "marktag": "fix_openai",
         "outboundTag": "direct"
-      },
-      {
+    },
+    {
         "type": "field",
-        "ip": [
-          "geoip:private"
-        ],
+        "ip": ["geoip:private"],
         "outboundTag": "block"
-      }
-    ]
-  },
-  "inbounds": [
-    {
-      "tag": "api",
-      "port": 1476,
-      "listen": "127.0.0.1",
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "127.0.0.1"
-      }
-    },
-EOF
-
-# 添加inbound配置
-for ((i=0; i<NUM_IPS; i++)); do
-    if [ $i -eq $((NUM_IPS-1)) ]; then
-        # 最后一个不加逗号
-        cat >> "$TEMP_FILE" << EOF
-    {
-      "tag": "vmess-ip$((i+1))",
-      "port": $((10001+i)),
-      "listen": "${IPS[i]}",
-      "protocol": "vmess",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUIDS[i]}",
-            "email": "user$((i+1))@example.com"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp"
-      }
     }
-EOF
-    else
-        # 不是最后一个加逗号
-        cat >> "$TEMP_FILE" << EOF
-    {
-      "tag": "vmess-ip$((i+1))",
-      "port": $((10001+i)),
-      "listen": "${IPS[i]}",
-      "protocol": "vmess",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUIDS[i]}",
-            "email": "user$((i+1))@example.com"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp"
-      }
-    },
-EOF
-    fi
-done
+])
 
-cat >> "$TEMP_FILE" << 'EOF'
-  ],
-  "outbounds": [
-EOF
-
-# 添加outbound配置 - 每个IP对应一个出口
-for ((i=0; i<NUM_IPS; i++)); do
-    interface=${IP_INTERFACES[${IPS[i]}]}
-    
-    if [ "$interface" = "default" ]; then
-        # 默认路由，不指定interface
-        cat >> "$TEMP_FILE" << EOF
+# 添加默认出站
+config["outbounds"].extend([
     {
-      "tag": "out-ip$((i+1))",
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "UseIP"
-      }
-    },
-EOF
-    else
-        # 指定interface
-        cat >> "$TEMP_FILE" << EOF
-    {
-      "tag": "out-ip$((i+1))",
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "UseIP"
-      },
-      "streamSettings": {
-        "sockopt": {
-          "interface": "$interface"
-        }
-      }
-    },
-EOF
-    fi
-done
-
-# 添加默认outbound
-cat >> "$TEMP_FILE" << 'EOF'
-    {
-      "tag": "direct",
-      "protocol": "freedom"
+        "tag": "direct",
+        "protocol": "freedom"
     },
     {
-      "tag": "block",
-      "protocol": "blackhole"
+        "tag": "block",
+        "protocol": "blackhole"
     }
-  ]
-}
+])
+
+# 输出JSON
+print(json.dumps(config, indent=2, ensure_ascii=False))
 EOF
 
-# 复制到最终配置文件
-cp "$TEMP_FILE" "$CONFIG_FILE"
-rm "$TEMP_FILE"
+# 检查Python脚本是否成功执行
+if [ $? -ne 0 ]; then
+    echo "✗ Python脚本执行失败"
+    if [ -f "$BACKUP_FILE" ]; then
+        cp "$BACKUP_FILE" "$CONFIG_FILE"
+    fi
+    exit 1
+fi
 
 echo "配置文件已生成: $CONFIG_FILE"
 
@@ -297,7 +258,6 @@ else
         echo "✓ JSON格式验证通过 (使用python验证)"
     else
         echo "✗ JSON格式错误"
-        echo "建议安装jq: yum install jq 或 apt install jq"
         echo "恢复备份文件..."
         if [ -f "$BACKUP_FILE" ]; then
             cp "$BACKUP_FILE" "$CONFIG_FILE"
