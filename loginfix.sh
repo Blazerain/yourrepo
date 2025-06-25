@@ -61,73 +61,10 @@ fi
 
 echo "正在生成新的配置文件..."
 
-# 生成inbounds配置
-generate_inbounds() {
-    for ((i=0; i<NUM_IPS; i++)); do
-        cat << EOF
-    {
-      "tag": "vmess-ip$((i+1))",
-      "port": $((10001+i)),
-      "listen": "${IPS[i]}",
-      "protocol": "vmess",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUIDS[i]}",
-            "email": "user$((i+1))@example.com"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp"
-      }
-    }$([ $((i+1)) -lt $NUM_IPS ] && echo "," || echo "")
-EOF
-    done
-}
+# 创建临时文件来构建JSON
+TEMP_FILE=$(mktemp)
 
-# 生成outbounds配置
-generate_outbounds() {
-    # 为每个IP生成对应的outbound
-    for ((i=0; i<NUM_IPS; i++)); do
-        interface=${IP_INTERFACES[${IPS[i]}]}
-        cat << EOF
-    {
-      "tag": "out-ip$((i+1))",
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "UseIP"
-      }$([ "$interface" != "default" ] && cat << INNER
-,
-      "streamSettings": {
-        "sockopt": {
-          "interface": "$interface"
-        }
-      }
-INNER
-)
-    }$([ $((i+1)) -lt $NUM_IPS ] && echo "," || echo "")
-EOF
-    done
-}
-
-# 生成routing规则
-generate_routing_rules() {
-    for ((i=0; i<NUM_IPS; i++)); do
-        cat << EOF
-      {
-        "type": "field",
-        "inboundTag": [
-          "vmess-ip$((i+1))"
-        ],
-        "outboundTag": "out-ip$((i+1))"
-      }$([ $((i+1)) -lt $NUM_IPS ] && echo "," || echo "")
-EOF
-    done
-}
-
-# 创建配置文件
-cat > "$CONFIG_FILE" << EOF
+cat > "$TEMP_FILE" << 'EOF'
 {
   "log": {
     "access": "/var/log/xray/access.log",
@@ -172,7 +109,23 @@ cat > "$CONFIG_FILE" << EOF
         ],
         "outboundTag": "api"
       },
-$(generate_routing_rules)
+EOF
+
+# 添加路由规则 - 每个入口对应一个出口
+for ((i=0; i<NUM_IPS; i++)); do
+    cat >> "$TEMP_FILE" << EOF
+      {
+        "type": "field",
+        "inboundTag": [
+          "vmess-ip$((i+1))"
+        ],
+        "outboundTag": "out-ip$((i+1))"
+      },
+EOF
+done
+
+# 添加其他路由规则
+cat >> "$TEMP_FILE" << 'EOF'
       {
         "type": "field",
         "protocol": [
@@ -216,10 +169,96 @@ $(generate_routing_rules)
         "address": "127.0.0.1"
       }
     },
-$(generate_inbounds)
+EOF
+
+# 添加inbound配置
+for ((i=0; i<NUM_IPS; i++)); do
+    if [ $i -eq $((NUM_IPS-1)) ]; then
+        # 最后一个不加逗号
+        cat >> "$TEMP_FILE" << EOF
+    {
+      "tag": "vmess-ip$((i+1))",
+      "port": $((10001+i)),
+      "listen": "${IPS[i]}",
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUIDS[i]}",
+            "email": "user$((i+1))@example.com"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }
+EOF
+    else
+        # 不是最后一个加逗号
+        cat >> "$TEMP_FILE" << EOF
+    {
+      "tag": "vmess-ip$((i+1))",
+      "port": $((10001+i)),
+      "listen": "${IPS[i]}",
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUIDS[i]}",
+            "email": "user$((i+1))@example.com"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    },
+EOF
+    fi
+done
+
+cat >> "$TEMP_FILE" << 'EOF'
   ],
   "outbounds": [
-$(generate_outbounds),
+EOF
+
+# 添加outbound配置 - 每个IP对应一个出口
+for ((i=0; i<NUM_IPS; i++)); do
+    interface=${IP_INTERFACES[${IPS[i]}]}
+    
+    if [ "$interface" = "default" ]; then
+        # 默认路由，不指定interface
+        cat >> "$TEMP_FILE" << EOF
+    {
+      "tag": "out-ip$((i+1))",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      }
+    },
+EOF
+    else
+        # 指定interface
+        cat >> "$TEMP_FILE" << EOF
+    {
+      "tag": "out-ip$((i+1))",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "interface": "$interface"
+        }
+      }
+    },
+EOF
+    fi
+done
+
+# 添加默认outbound
+cat >> "$TEMP_FILE" << 'EOF'
     {
       "tag": "direct",
       "protocol": "freedom"
@@ -232,19 +271,39 @@ $(generate_outbounds),
 }
 EOF
 
+# 复制到最终配置文件
+cp "$TEMP_FILE" "$CONFIG_FILE"
+rm "$TEMP_FILE"
+
 echo "配置文件已生成: $CONFIG_FILE"
 
 # 验证JSON格式
+echo "正在验证JSON格式..."
 if command -v jq &> /dev/null; then
-    echo "正在验证JSON格式..."
     if jq . "$CONFIG_FILE" > /dev/null 2>&1; then
         echo "✓ JSON格式验证通过"
     else
-        echo "✗ JSON格式错误，请检查配置文件"
+        echo "✗ JSON格式错误，正在显示错误信息:"
+        jq . "$CONFIG_FILE"
+        echo "恢复备份文件..."
+        if [ -f "$BACKUP_FILE" ]; then
+            cp "$BACKUP_FILE" "$CONFIG_FILE"
+        fi
         exit 1
     fi
 else
-    echo "提示: 建议安装jq来验证JSON格式 (yum install jq 或 apt install jq)"
+    # 使用python验证JSON
+    if python3 -c "import json; json.load(open('$CONFIG_FILE'))" 2>/dev/null; then
+        echo "✓ JSON格式验证通过 (使用python验证)"
+    else
+        echo "✗ JSON格式错误"
+        echo "建议安装jq: yum install jq 或 apt install jq"
+        echo "恢复备份文件..."
+        if [ -f "$BACKUP_FILE" ]; then
+            cp "$BACKUP_FILE" "$CONFIG_FILE"
+        fi
+        exit 1
+    fi
 fi
 
 # 显示配置摘要
@@ -298,13 +357,30 @@ for ((i=0; i<NUM_IPS; i++)); do
     echo "  iptables -A INPUT -p tcp --dport $port -j ACCEPT"
 done
 
+# 语法检查
+echo ""
+echo "=== 配置语法检查 ==="
+if xray -test -confdir /etc/xray 2>/dev/null; then
+    echo "✓ Xray配置语法检查通过"
+else
+    echo "✗ Xray配置语法检查失败"
+    echo "正在显示错误信息:"
+    xray -test -confdir /etc/xray
+    echo "恢复备份文件..."
+    if [ -f "$BACKUP_FILE" ]; then
+        cp "$BACKUP_FILE" "$CONFIG_FILE"
+    fi
+    exit 1
+fi
+
 # 重启服务选项
 echo ""
 read -p "是否重启Xray服务？(y/N): " restart_choice
 if [[ "$restart_choice" =~ ^[Yy]$ ]]; then
     echo "正在重启Xray服务..."
     systemctl restart xray
-    if [ $? -eq 0 ]; then
+    sleep 2
+    if systemctl is-active --quiet xray; then
         echo "✓ Xray服务重启成功"
         echo "✓ 多出口配置已生效"
         
@@ -313,7 +389,9 @@ if [[ "$restart_choice" =~ ^[Yy]$ ]]; then
         echo "=== 服务状态 ==="
         systemctl status xray --no-pager -l
     else
-        echo "✗ Xray服务重启失败，请检查配置"
+        echo "✗ Xray服务启动失败，请检查配置"
+        echo "错误日志:"
+        journalctl -u xray --no-pager -l --since "1 minute ago"
         if [ -f "$BACKUP_FILE" ]; then
             echo "如需恢复原配置，请执行: cp $BACKUP_FILE $CONFIG_FILE"
         fi
