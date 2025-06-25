@@ -1,304 +1,331 @@
 #!/bin/bash
 
-echo "🌍 修复CDN地区限制问题"
-echo "=========================================="
-echo "目标: 让cdn.hk.beanfun.com通过代理访问，绕过地区限制"
-echo ""
+# Xray多出口配置自动生成脚本
+# 实现一个IP入口对应一个IP出口
 
-# 1. 检查xray服务状态
-echo "1️⃣ 检查代理服务状态"
-echo "----------------------------------------"
+echo "=== Xray多出口配置自动生成脚本 ==="
 
-if systemctl is-active --quiet xray; then
-    echo "✅ xray服务正在运行"
-    
-    # 获取端口
-    SOCKS_PORT=$(sudo netstat -tlnp | grep xray | awk '{print $4}' | cut -d: -f2 | head -1)
-    if [ -n "$SOCKS_PORT" ]; then
-        echo "📍 检测到SOCKS5端口: $SOCKS_PORT"
-    else
-        echo "❌ 无法检测端口"
-        exit 1
-    fi
-else
-    echo "❌ xray服务未运行"
-    echo "尝试启动服务..."
-    sudo systemctl start xray
-    sleep 3
-    if systemctl is-active --quiet xray; then
-        echo "✅ 服务启动成功"
-        SOCKS_PORT=$(sudo netstat -tlnp | grep xray | awk '{print $4}' | cut -d: -f2 | head -1)
-    else
-        echo "❌ 服务启动失败"
-        sudo systemctl status xray --no-pager -l
-        exit 1
-    fi
-fi
+# 获取内网IP列表（排除127.0.0.1）
+echo "正在获取内网IP..."
+IPS=($(ip -br addr show | grep -v "127.0.0.1" | awk '{for(i=3;i<=NF;i++) print $i}' | cut -d'/' -f1))
 
-echo ""
+echo "获取到 ${#IPS[@]} 个内网IP:"
+for i in "${!IPS[@]}"; do
+    echo "  IP$((i+1)): ${IPS[i]}"
+done
 
-# 2. 测试当前代理功能
-echo "2️⃣ 测试代理基本功能"
-echo "----------------------------------------"
-
-echo "🧪 测试代理连接到httpbin.org:"
-if timeout 15 curl --socks5 vip1:123456@127.0.0.1:$SOCKS_PORT -s https://httpbin.org/ip --connect-timeout 5 >/dev/null 2>&1; then
-    echo "✅ 代理基本功能正常"
-    
-    # 获取代理IP
-    proxy_ip=$(timeout 15 curl --socks5 vip1:123456@127.0.0.1:$SOCKS_PORT -s https://httpbin.org/ip --connect-timeout 5 2>/dev/null | grep -o '"origin": "[^"]*"' | cut -d'"' -f4)
-    if [ -n "$proxy_ip" ]; then
-        echo "  代理IP: $proxy_ip"
-    fi
-else
-    echo "❌ 代理基本功能异常"
-    echo "请先修复代理服务"
+# 检查是否获取到IP
+if [ ${#IPS[@]} -eq 0 ]; then
+    echo "错误: 未获取到任何内网IP"
     exit 1
 fi
 
-echo ""
-
-# 3. 测试当前cdn.hk.beanfun.com访问情况
-echo "3️⃣ 测试当前CDN访问情况"
-echo "----------------------------------------"
-
-echo "🔗 直连测试 cdn.hk.beanfun.com/www/ip.html:"
-direct_result=$(timeout 10 curl -s https://cdn.hk.beanfun.com/www/ip.html --connect-timeout 5 2>/dev/null)
-if echo "$direct_result" | grep -q "國家或地區"; then
-    echo "❌ 直连被地区限制（符合预期）"
-else
-    echo "🤔 直连结果异常: $(echo "$direct_result" | head -1)"
+# 使用前3个IP，如果不足3个则只配置现有的
+NUM_IPS=${#IPS[@]}
+if [ $NUM_IPS -gt 3 ]; then
+    NUM_IPS=3
+    echo "使用前3个IP进行配置"
 fi
 
-echo ""
-echo "🔗 代理测试 cdn.hk.beanfun.com/www/ip.html:"
-proxy_result=$(timeout 15 curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -s https://cdn.hk.beanfun.com/www/ip.html --connect-timeout 5 2>/dev/null)
-if echo "$proxy_result" | grep -q "國家或地區"; then
-    echo "❌ 代理仍被地区限制 - cdn.hk.beanfun.com 可能在直连配置中"
-    cdn_needs_proxy=true
-elif [ -n "$proxy_result" ] && ! echo "$proxy_result" | grep -q "Error"; then
-    echo "✅ 代理访问成功 - cdn.hk.beanfun.com 已正确配置"
-    cdn_needs_proxy=false
-    echo "  内容长度: $(echo "$proxy_result" | wc -c) 字节"
-else
-    echo "❌ 代理访问失败: $proxy_result"
-    cdn_needs_proxy=true
-fi
+# 获取网络接口信息
+echo "正在获取网络接口信息..."
+declare -A IP_INTERFACES
+for ip in "${IPS[@]:0:$NUM_IPS}"; do
+    interface=$(ip route get "$ip" 2>/dev/null | grep -oP 'dev \K\w+' | head -1)
+    if [ -n "$interface" ]; then
+        IP_INTERFACES[$ip]=$interface
+        echo "  $ip -> $interface"
+    else
+        echo "  $ip -> 未找到对应接口，将使用默认路由"
+        IP_INTERFACES[$ip]="default"
+    fi
+done
 
-echo ""
+# 生成UUID
+echo "正在生成UUID..."
+UUIDS=()
+for ((i=0; i<NUM_IPS; i++)); do
+    UUIDS[i]=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    echo "  UUID$((i+1)): ${UUIDS[i]}"
+done
 
-# 4. 检查当前路由配置
-echo "4️⃣ 检查当前路由配置"
-echo "----------------------------------------"
-
+# 生成配置文件
 CONFIG_FILE="/etc/xray/config.json"
+BACKUP_FILE="/etc/xray/config.json.backup.$(date +%Y%m%d_%H%M%S)"
+
+# 备份原配置文件
 if [ -f "$CONFIG_FILE" ]; then
-    echo "🔍 检查cdn.hk.beanfun.com的路由配置:"
-    
-    # 检查是否在直连域名列表中
-    if grep -q "cdn\.hk\.beanfun\.com" "$CONFIG_FILE"; then
-        echo "❌ cdn.hk.beanfun.com 在直连域名列表中"
-        echo "  需要移除以让其走代理"
-        cdn_in_direct_domain=true
+    echo "备份原配置文件到: $BACKUP_FILE"
+    cp "$CONFIG_FILE" "$BACKUP_FILE"
+fi
+
+echo "正在生成新的配置文件..."
+
+# 生成inbounds配置
+generate_inbounds() {
+    for ((i=0; i<NUM_IPS; i++)); do
+        cat << EOF
+    {
+      "tag": "vmess-ip$((i+1))",
+      "port": $((10001+i)),
+      "listen": "${IPS[i]}",
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUIDS[i]}",
+            "email": "user$((i+1))@example.com"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }$([ $((i+1)) -lt $NUM_IPS ] && echo "," || echo "")
+EOF
+    done
+}
+
+# 生成outbounds配置
+generate_outbounds() {
+    # 为每个IP生成对应的outbound
+    for ((i=0; i<NUM_IPS; i++)); do
+        interface=${IP_INTERFACES[${IPS[i]}]}
+        cat << EOF
+    {
+      "tag": "out-ip$((i+1))",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      }$([ "$interface" != "default" ] && cat << INNER
+,
+      "streamSettings": {
+        "sockopt": {
+          "interface": "$interface"
+        }
+      }
+INNER
+)
+    }$([ $((i+1)) -lt $NUM_IPS ] && echo "," || echo "")
+EOF
+    done
+}
+
+# 生成routing规则
+generate_routing_rules() {
+    for ((i=0; i<NUM_IPS; i++)); do
+        cat << EOF
+      {
+        "type": "field",
+        "inboundTag": [
+          "vmess-ip$((i+1))"
+        ],
+        "outboundTag": "out-ip$((i+1))"
+      }$([ $((i+1)) -lt $NUM_IPS ] && echo "," || echo "")
+EOF
+    done
+}
+
+# 创建配置文件
+cat > "$CONFIG_FILE" << EOF
+{
+  "log": {
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log",
+    "loglevel": "warning"
+  },
+  "dns": {},
+  "api": {
+    "tag": "api",
+    "services": [
+      "HandlerService",
+      "LoggerService",
+      "StatsService"
+    ]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 2,
+        "connIdle": 147,
+        "uplinkOnly": 8,
+        "downlinkOnly": 9,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "api"
+        ],
+        "outboundTag": "api"
+      },
+$(generate_routing_rules)
+      {
+        "type": "field",
+        "protocol": [
+          "bittorrent"
+        ],
+        "marktag": "ban_bt",
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:cn"
+        ],
+        "marktag": "ban_geoip_cn",
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "geosite:openai"
+        ],
+        "marktag": "fix_openai",
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "block"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "tag": "api",
+      "port": 1476,
+      "listen": "127.0.0.1",
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1"
+      }
+    },
+$(generate_inbounds)
+  ],
+  "outbounds": [
+$(generate_outbounds),
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ]
+}
+EOF
+
+echo "配置文件已生成: $CONFIG_FILE"
+
+# 验证JSON格式
+if command -v jq &> /dev/null; then
+    echo "正在验证JSON格式..."
+    if jq . "$CONFIG_FILE" > /dev/null 2>&1; then
+        echo "✓ JSON格式验证通过"
     else
-        echo "✅ cdn.hk.beanfun.com 不在直连域名列表中"
-        cdn_in_direct_domain=false
+        echo "✗ JSON格式错误，请检查配置文件"
+        exit 1
     fi
+else
+    echo "提示: 建议安装jq来验证JSON格式 (yum install jq 或 apt install jq)"
+fi
+
+# 显示配置摘要
+echo ""
+echo "=== 多出口配置摘要 ==="
+for ((i=0; i<NUM_IPS; i++)); do
+    interface=${IP_INTERFACES[${IPS[i]}]}
+    echo "入口$((i+1)): ${IPS[i]}:$((10001+i)) -> 出口$((i+1)): $interface"
+    echo "  UUID: ${UUIDS[i]}"
+done
+
+# 生成客户端连接信息
+echo ""
+echo "=== 客户端连接信息 ==="
+for ((i=0; i<NUM_IPS; i++)); do
+    echo "线路$((i+1)):"
+    echo "  地址: ${IPS[i]}"
+    echo "  端口: $((10001+i))"
+    echo "  UUID: ${UUIDS[i]}"
+    echo "  协议: VMess"
+    echo "  传输: TCP"
+    echo "  出口: ${IP_INTERFACES[${IPS[i]}]}"
+    echo ""
+done
+
+# 显示路由策略
+echo "=== 路由策略说明 ==="
+echo "每个入口IP都有独立的出口路由："
+for ((i=0; i<NUM_IPS; i++)); do
+    echo "• 连接到 ${IPS[i]}:$((10001+i)) 的流量将从 ${IP_INTERFACES[${IPS[i]}]} 出口"
+done
+
+# 检查防火墙端口
+echo ""
+echo "=== 端口检查 ==="
+echo "需要开放的端口:"
+for ((i=0; i<NUM_IPS; i++)); do
+    port=$((10001+i))
+    echo "  端口 $port (绑定到 ${IPS[i]})"
     
-    # 检查IP是否在直连列表中
-    cdn_ip=$(getent hosts cdn.hk.beanfun.com | awk '{print $1}' | head -1)
-    if [ -n "$cdn_ip" ]; then
-        echo "  cdn.hk.beanfun.com 解析IP: $cdn_ip"
-        if grep -q "${cdn_ip}/32" "$CONFIG_FILE"; then
-            echo "❌ cdn IP ($cdn_ip) 在直连IP列表中"
-            cdn_ip_in_direct=true
-        else
-            echo "✅ cdn IP ($cdn_ip) 不在直连IP列表中"
-            cdn_ip_in_direct=false
+    # 检查端口是否被占用
+    if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+        echo "    警告: 端口 $port 可能已被占用"
+    fi
+done
+
+echo ""
+echo "防火墙配置建议:"
+for ((i=0; i<NUM_IPS; i++)); do
+    port=$((10001+i))
+    echo "  iptables -A INPUT -p tcp --dport $port -j ACCEPT"
+done
+
+# 重启服务选项
+echo ""
+read -p "是否重启Xray服务？(y/N): " restart_choice
+if [[ "$restart_choice" =~ ^[Yy]$ ]]; then
+    echo "正在重启Xray服务..."
+    systemctl restart xray
+    if [ $? -eq 0 ]; then
+        echo "✓ Xray服务重启成功"
+        echo "✓ 多出口配置已生效"
+        
+        # 显示服务状态
+        echo ""
+        echo "=== 服务状态 ==="
+        systemctl status xray --no-pager -l
+    else
+        echo "✗ Xray服务重启失败，请检查配置"
+        if [ -f "$BACKUP_FILE" ]; then
+            echo "如需恢复原配置，请执行: cp $BACKUP_FILE $CONFIG_FILE"
         fi
-    else
-        echo "⚠️ 无法解析cdn.hk.beanfun.com IP"
-        cdn_ip_in_direct=false
     fi
 else
-    echo "❌ 配置文件不存在"
-    exit 1
+    echo "提示: 请手动执行 'systemctl restart xray' 来重启服务"
 fi
 
 echo ""
-
-# 5. 修复配置（如果需要）
-if [ "$cdn_needs_proxy" = true ] && ([ "$cdn_in_direct_domain" = true ] || [ "$cdn_ip_in_direct" = true ]); then
-    echo "5️⃣ 修复路由配置"
-    echo "----------------------------------------"
-    
-    echo "🛑 停止xray服务..."
-    sudo systemctl stop xray
-    
-    # 备份配置
-    backup_file="/etc/xray/config.json.cdn_fix.$(date +%Y%m%d_%H%M%S)"
-    echo "💾 备份配置到: $backup_file"
-    sudo cp "$CONFIG_FILE" "$backup_file"
-    
-    # 移除cdn.hk.beanfun.com的直连配置
-    if [ "$cdn_in_direct_domain" = true ]; then
-        echo "📝 从直连域名列表移除 cdn.hk.beanfun.com"
-        sudo sed -i '/cdn\.hk\.beanfun\.com/d' "$CONFIG_FILE"
-    fi
-    
-    # 移除cdn IP的直连配置
-    if [ "$cdn_ip_in_direct" = true ] && [ -n "$cdn_ip" ]; then
-        echo "📝 从直连IP列表移除 $cdn_ip"
-        sudo sed -i "/${cdn_ip//./\\.}\/32/d" "$CONFIG_FILE"
-    fi
-    
-    # 验证配置
-    echo "🔍 验证修改后的配置..."
-    if /usr/local/bin/xray test -c "$CONFIG_FILE" >/dev/null 2>&1 || /usr/local/bin/xray -test -config "$CONFIG_FILE" >/dev/null 2>&1; then
-        echo "✅ 配置文件验证通过"
-    else
-        echo "❌ 配置文件验证失败，恢复备份"
-        sudo cp "$backup_file" "$CONFIG_FILE"
-        echo "配置已恢复，请手动检查"
-        exit 1
-    fi
-    
-    # 重启服务
-    echo "🚀 重启xray服务..."
-    sudo systemctl start xray
-    sleep 5
-    
-    if systemctl is-active --quiet xray; then
-        echo "✅ 服务重启成功"
-    else
-        echo "❌ 服务重启失败"
-        sudo systemctl status xray --no-pager -l
-        exit 1
-    fi
-    
-    echo "✅ 路由配置修复完成"
-    echo ""
-else
-    echo "5️⃣ 配置检查结果"
-    echo "----------------------------------------"
-    if [ "$cdn_needs_proxy" = false ]; then
-        echo "✅ cdn.hk.beanfun.com 已正确通过代理访问"
-    else
-        echo "⚠️ cdn.hk.beanfun.com 仍需要配置优化"
-    fi
-fi
-
-# 6. 最终测试
-echo "6️⃣ 最终测试"
-echo "=========================================="
-
-echo "🧪 完整流程测试:"
+echo "=== 测试建议 ==="
+echo "1. 分别连接不同的入口IP测试路由是否正确"
+echo "2. 使用 https://ipinfo.io 等网站检查出口IP"
+echo "3. 检查日志: tail -f /var/log/xray/error.log"
 echo ""
-
-# 测试login重定向
-echo "1. 测试 login.hk.beanfun.com 重定向:"
-login_response=$(curl -s -I https://login.hk.beanfun.com --connect-timeout 10 2>/dev/null)
-if echo "$login_response" | grep -q "302"; then
-    redirect_url=$(echo "$login_response" | grep "Location:" | awk '{print $2}' | tr -d '\r\n')
-    echo "✅ 重定向正常 → $redirect_url"
-else
-    echo "❌ 重定向异常"
-fi
-
-echo ""
-
-# 测试直连cdn
-echo "2. 测试直连 cdn.hk.beanfun.com/www/ip.html:"
-direct_result=$(timeout 10 curl -s https://cdn.hk.beanfun.com/www/ip.html --connect-timeout 5 2>/dev/null)
-if echo "$direct_result" | grep -q "國家或地區"; then
-    echo "❌ 地区限制（正常，需要代理）"
-elif [ -n "$direct_result" ]; then
-    echo "✅ 直连成功"
-    echo "  内容长度: $(echo "$direct_result" | wc -c) 字节"
-else
-    echo "❌ 连接失败"
-fi
-
-echo ""
-
-# 测试代理cdn
-echo "3. 测试代理 cdn.hk.beanfun.com/www/ip.html:"
-proxy_result=$(timeout 15 curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -s https://cdn.hk.beanfun.com/www/ip.html --connect-timeout 5 2>/dev/null)
-if echo "$proxy_result" | grep -q "國家或地區"; then
-    echo "❌ 代理仍被地区限制"
-    echo "  可能需要进一步配置调整"
-elif [ -n "$proxy_result" ] && ! echo "$proxy_result" | grep -q "Error"; then
-    echo "✅ 代理成功绕过地区限制"
-    echo "  内容长度: $(echo "$proxy_result" | wc -c) 字节"
-    echo "  内容预览: $(echo "$proxy_result" | head -2 | tr '\n' ' ')"
-    SUCCESS=true
-else
-    echo "❌ 代理访问失败"
-    echo "  错误: $proxy_result"
-fi
-
-echo ""
-
-# 测试完整重定向跟随
-echo "4. 测试完整流程（跟随重定向）:"
-echo "命令: curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -L https://login.hk.beanfun.com"
-full_result=$(timeout 15 curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -s -L https://login.hk.beanfun.com --connect-timeout 5 2>/dev/null)
-
-if echo "$full_result" | grep -q "國家或地區"; then
-    echo "❌ 完整流程仍遇到地区限制"
-elif [ -n "$full_result" ] && ! echo "$full_result" | grep -q "Error"; then
-    echo "✅ 完整流程成功！"
-    echo "  最终内容长度: $(echo "$full_result" | wc -c) 字节"
-    SUCCESS=true
-else
-    echo "❌ 完整流程失败"
-fi
-
-echo ""
-
-# 7. 总结和建议
-echo "7️⃣ 总结和后续建议"
-echo "=========================================="
-
-if [ "$SUCCESS" = true ]; then
-    echo "🎉 问题解决成功！"
-    echo ""
-    echo "✅ 现在可以正常使用:"
-    echo "  - login.hk.beanfun.com 正常重定向"
-    echo "  - cdn.hk.beanfun.com 通过代理绕过地区限制"
-    echo "  - 完整的Beanfun访问流程工作正常"
-    echo ""
-    echo "🎮 游戏客户端配置:"
-    echo "  代理类型: SOCKS5"
-    echo "  服务器: 127.0.0.1 (本地) 或您的服务器IP"
-    echo "  端口: $SOCKS_PORT"
-    echo "  用户名: vip1"
-    echo "  密码: 123456"
-    echo "  ⚠️ 重要: 启用'代理DNS查询'或'远程DNS解析'"
-else
-    echo "⚠️ 仍存在问题，建议:"
-    echo ""
-    echo "🔧 手动测试命令:"
-    echo "  curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT https://cdn.hk.beanfun.com/www/ip.html"
-    echo "  curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -L https://login.hk.beanfun.com"
-    echo ""
-    echo "📋 检查项目:"
-    echo "  1. 确认代理服务正常: sudo systemctl status xray"
-    echo "  2. 检查端口监听: sudo netstat -tlnp | grep $SOCKS_PORT"
-    echo "  3. 查看配置文件: grep -A10 -B10 cdn /etc/xray/config.json"
-    echo "  4. 检查防火墙: sudo iptables -L INPUT -n | grep $SOCKS_PORT"
-fi
-
-echo ""
-echo "💡 常用测试命令:"
-echo "# 基础代理测试"
-echo "curl --socks5 vip1:123456@127.0.0.1:$SOCKS_PORT https://httpbin.org/ip"
-echo ""
-echo "# Beanfun完整测试"
-echo "curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT -L https://login.hk.beanfun.com"
-echo ""
-echo "# CDN单独测试" 
-echo "curl --socks5-hostname vip1:123456@127.0.0.1:$SOCKS_PORT https://cdn.hk.beanfun.com/www/ip.html"
-
-echo ""
-echo "🎯 修复完成时间: $(date)"
+echo "脚本执行完成！"
