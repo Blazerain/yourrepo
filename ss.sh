@@ -2,7 +2,7 @@
 
 # 多IP Shadowsocks一键安装脚本
 # 要求：入口IP=出口IP，使用origin模式
-# 作者：自定义版本基于233boy/Xray  curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss.sh| bash
+# 作者：自定义版本基于233boy/Xray
 
 set -e
 
@@ -11,7 +11,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # 日志函数
 log_info() {
