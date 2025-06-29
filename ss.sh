@@ -1,19 +1,16 @@
 #!/bin/bash
-
 # 多IP Shadowsocks一键安装脚本
 # 要求：入口IP=出口IP，使用origin模式
 # 作者：自定义版本基于233boy/Xray
 
 set -e
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 日志函数
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -26,7 +23,6 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 检查root权限
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_error "此脚本需要root权限运行"
@@ -34,11 +30,8 @@ check_root() {
     fi
 }
 
-# 获取服务器所有IP地址
 get_server_ips() {
     log_info "检测服务器IP地址..."
-    
-    # 获取所有网卡IP（排除lo、docker等）
     SERVER_IPS=($(ip -4 addr show | grep -oE 'inet [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}' | grep -v '^127\.' | grep -v '^172\.17\.' | grep -v '^172\.18\.'))
     
     if [ ${#SERVER_IPS[@]} -eq 0 ]; then
@@ -52,7 +45,6 @@ get_server_ips() {
     done
 }
 
-# 安装233boy Xray脚本
 install_xray_script() {
     log_info "安装233boy Xray脚本..."
     
@@ -71,7 +63,6 @@ install_xray_script() {
     log_info "Xray安装完成"
 }
 
-# 创建Shadowsocks配置
 create_shadowsocks_configs() {
     log_info "创建Shadowsocks配置..."
     
@@ -79,26 +70,20 @@ create_shadowsocks_configs() {
     local method="aes-256-gcm"
     local ports=(11000 12000 13000)
     
-    # 删除默认配置（如果存在）
     xray del reality >/dev/null 2>&1 || true
     
-    # 为前三个IP创建SS配置
     for i in {0..2}; do
         if [ $i -lt ${#SERVER_IPS[@]} ]; then
             local ip=${SERVER_IPS[$i]}
             local port=${ports[$i]}
             
             log_info "为IP ${ip} 创建SS配置，端口：${port}"
-            
-            # 使用233boy脚本创建SS配置
             xray add ss ${port} ${password} ${method}
-            
             log_info "IP ${ip}:${port} SS配置创建完成"
         fi
     done
 }
 
-# 修改配置文件添加sendThrough支持
 modify_config_for_origin() {
     log_info "修改配置文件以支持origin模式..."
     
@@ -110,11 +95,9 @@ modify_config_for_origin() {
         exit 1
     fi
     
-    # 备份原配置
     cp "$config_file" "$backup_file"
     log_info "原配置已备份到：$backup_file"
     
-    # 使用Python修改JSON配置（如果有python）
     if command -v python3 >/dev/null 2>&1; then
         python3 << 'EOF'
 import json
@@ -126,22 +109,17 @@ try:
     with open(config_file, 'r') as f:
         config = json.load(f)
     
-    # 修改所有outbound添加sendThrough: "origin"
     if 'outbounds' in config:
         for outbound in config['outbounds']:
             outbound['sendThrough'] = 'origin'
         
-        # 确保第一个outbound是direct
         if len(config['outbounds']) > 0:
-            # 添加一个direct outbound作为默认
             direct_outbound = {
                 "sendThrough": "origin",
                 "protocol": "freedom",
                 "settings": {},
                 "tag": "direct"
             }
-            
-            # 将direct outbound插入到第一位
             config['outbounds'].insert(0, direct_outbound)
     
     with open(config_file, 'w') as f:
@@ -159,10 +137,8 @@ EOF
     fi
 }
 
-# 重启服务
 restart_services() {
     log_info "重启Xray服务..."
-    
     xray restart
     
     if [ $? -eq 0 ]; then
@@ -173,7 +149,6 @@ restart_services() {
     fi
 }
 
-# 显示配置信息
 show_config_info() {
     log_info "配置完成！以下是连接信息："
     echo ""
@@ -211,7 +186,6 @@ show_config_info() {
     echo ""
 }
 
-# 主函数
 main() {
     echo -e "${BLUE}"
     echo "=================================="
@@ -223,7 +197,6 @@ main() {
     check_root
     get_server_ips
     
-    # 确认信息
     echo ""
     read -p "检测到 ${#SERVER_IPS[@]} 个IP地址，将为前3个IP创建SS配置。是否继续？[y/N]: " confirm
     
@@ -241,5 +214,4 @@ main() {
     log_info "安装完成！"
 }
 
-# 运行主函数
 main "$@"
