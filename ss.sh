@@ -1,267 +1,245 @@
 #!/bin/bash
 
-# Shadowsocks一键安装脚本 - 修复版
-# 专为Beanfun游戏优化
+# 多IP Shadowsocks一键安装脚本
+# 要求：入口IP=出口IP，使用origin模式
+# 作者：自定义版本基于233boy/Xray  curl -sSL https://raw.githubusercontent.com/Blazerain/yourrepo/main/ss.sh| bash
 
 set -e
 
-echo "================================================"
-echo "🚀 Shadowsocks一键安装脚本 - Beanfun优化版"
-echo "🎮 专为游戏代理优化，支持BBR加速"
-echo "================================================"
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 日志函数
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
 
 # 检查root权限
-if [[ $EUID -ne 0 ]]; then
-    echo "❌ 请使用root权限运行此脚本"
-    exit 1
-fi
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "此脚本需要root权限运行"
+        exit 1
+    fi
+}
 
-# 停止可能冲突的服务
-echo "🛑 停止可能冲突的服务..."
-systemctl stop xray 2>/dev/null || true
-systemctl stop v2ray 2>/dev/null || true
+# 获取服务器所有IP地址
+get_server_ips() {
+    log_info "检测服务器IP地址..."
+    
+    # 获取所有网卡IP（排除lo、docker等）
+    SERVER_IPS=($(ip -4 addr show | grep -oE 'inet [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}' | grep -v '^127\.' | grep -v '^172\.17\.' | grep -v '^172\.18\.'))
+    
+    if [ ${#SERVER_IPS[@]} -eq 0 ]; then
+        log_error "未检测到可用的IP地址"
+        exit 1
+    fi
+    
+    log_info "检测到IP地址："
+    for i in "${!SERVER_IPS[@]}"; do
+        echo "  $((i+1)). ${SERVER_IPS[$i]}"
+    done
+}
 
-# 检测系统
-if [[ -f /etc/redhat-release ]]; then
-    OS="centos"
-    echo "✅ 检测到CentOS系统"
-elif [[ -f /etc/debian_version ]]; then
-    OS="debian"
-    echo "✅ 检测到Debian/Ubuntu系统"
-else
-    echo "❌ 不支持的操作系统"
-    exit 1
-fi
+# 安装233boy Xray脚本
+install_xray_script() {
+    log_info "安装233boy Xray脚本..."
+    
+    if command -v xray >/dev/null 2>&1; then
+        log_warn "检测到Xray已安装，跳过安装步骤"
+        return
+    fi
+    
+    bash <(wget -qO- -o- https://github.com/233boy/Xray/raw/main/install.sh)
+    
+    if ! command -v xray >/dev/null 2>&1; then
+        log_error "Xray安装失败"
+        exit 1
+    fi
+    
+    log_info "Xray安装完成"
+}
 
-# 端口配置
-if [[ -n "$1" ]]; then
-    SS_PORT="$1"
-else
-    # 自动选择可用端口
-    for port in 8388 8080 443 80 1080 3128 8443; do
-        if ! netstat -tuln | grep -q ":$port "; then
-            SS_PORT=$port
-            break
+# 创建Shadowsocks配置
+create_shadowsocks_configs() {
+    log_info "创建Shadowsocks配置..."
+    
+    local password="123"
+    local method="aes-256-gcm"
+    local ports=(11000 12000 13000)
+    
+    # 删除默认配置（如果存在）
+    xray del reality >/dev/null 2>&1 || true
+    
+    # 为前三个IP创建SS配置
+    for i in {0..2}; do
+        if [ $i -lt ${#SERVER_IPS[@]} ]; then
+            local ip=${SERVER_IPS[$i]}
+            local port=${ports[$i]}
+            
+            log_info "为IP ${ip} 创建SS配置，端口：${port}"
+            
+            # 使用233boy脚本创建SS配置
+            xray add ss ${port} ${password} ${method}
+            
+            log_info "IP ${ip}:${port} SS配置创建完成"
+        fi
+    done
+}
+
+# 修改配置文件添加sendThrough支持
+modify_config_for_origin() {
+    log_info "修改配置文件以支持origin模式..."
+    
+    local config_file="/etc/xray/conf/config.json"
+    local backup_file="/etc/xray/conf/config.json.backup"
+    
+    if [ ! -f "$config_file" ]; then
+        log_error "配置文件不存在：$config_file"
+        exit 1
+    fi
+    
+    # 备份原配置
+    cp "$config_file" "$backup_file"
+    log_info "原配置已备份到：$backup_file"
+    
+    # 使用Python修改JSON配置（如果有python）
+    if command -v python3 >/dev/null 2>&1; then
+        python3 << 'EOF'
+import json
+import sys
+
+config_file = "/etc/xray/conf/config.json"
+
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+    
+    # 修改所有outbound添加sendThrough: "origin"
+    if 'outbounds' in config:
+        for outbound in config['outbounds']:
+            outbound['sendThrough'] = 'origin'
+        
+        # 确保第一个outbound是direct
+        if len(config['outbounds']) > 0:
+            # 添加一个direct outbound作为默认
+            direct_outbound = {
+                "sendThrough": "origin",
+                "protocol": "freedom",
+                "settings": {},
+                "tag": "direct"
+            }
+            
+            # 将direct outbound插入到第一位
+            config['outbounds'].insert(0, direct_outbound)
+    
+    with open(config_file, 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    print("配置文件修改完成")
+    
+except Exception as e:
+    print(f"修改配置文件失败: {e}")
+    sys.exit(1)
+EOF
+    else
+        log_warn "未找到Python3，需要手动修改配置文件"
+        log_info "请在每个outbound中添加: \"sendThrough\": \"origin\""
+    fi
+}
+
+# 重启服务
+restart_services() {
+    log_info "重启Xray服务..."
+    
+    xray restart
+    
+    if [ $? -eq 0 ]; then
+        log_info "Xray服务重启成功"
+    else
+        log_error "Xray服务重启失败"
+        exit 1
+    fi
+}
+
+# 显示配置信息
+show_config_info() {
+    log_info "配置完成！以下是连接信息："
+    echo ""
+    echo -e "${BLUE}================================${NC}"
+    echo -e "${BLUE}    Shadowsocks 配置信息${NC}"
+    echo -e "${BLUE}================================${NC}"
+    
+    local password="123"
+    local method="aes-256-gcm"
+    local ports=(11000 12000 13000)
+    
+    for i in {0..2}; do
+        if [ $i -lt ${#SERVER_IPS[@]} ]; then
+            local ip=${SERVER_IPS[$i]}
+            local port=${ports[$i]}
+            
+            echo ""
+            echo -e "${GREEN}配置 $((i+1)):${NC}"
+            echo -e "  服务器: ${ip}"
+            echo -e "  端口: ${port}"
+            echo -e "  密码: ${password}"
+            echo -e "  加密: ${method}"
+            echo -e "  模式: Origin (入口IP=出口IP)"
         fi
     done
     
-    if [[ -z "$SS_PORT" ]]; then
-        SS_PORT=8388
-    fi
-fi
-
-echo "📍 使用端口: $SS_PORT"
-
-# 生成随机密码
-SS_PASSWORD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
-echo "🔑 生成密码: $SS_PASSWORD"
-
-# 安装依赖
-echo "📦 安装依赖包..."
-if [[ $OS == "centos" ]]; then
-    yum update -y >/dev/null 2>&1
-    yum install -y epel-release >/dev/null 2>&1
-    yum install -y wget curl unzip tar git python3 python3-pip >/dev/null 2>&1
-    yum install -y gcc gcc-c++ autoconf libtool make >/dev/null 2>&1
-else
-    apt-get update >/dev/null 2>&1
-    apt-get install -y wget curl unzip tar git python3 python3-pip >/dev/null 2>&1
-    apt-get install -y build-essential autoconf libtool >/dev/null 2>&1
-fi
-
-echo "✅ 依赖安装完成"
-
-# 使用Docker方式安装（最稳定）
-echo "🐳 使用Docker安装Shadowsocks..."
-
-# 安装Docker
-if ! command -v docker >/dev/null 2>&1; then
-    echo "📦 安装Docker..."
-    curl -fsSL https://get.docker.com | bash >/dev/null 2>&1
-    systemctl start docker
-    systemctl enable docker
-fi
-
-echo "✅ Docker安装完成"
-
-# 停止现有容器
-docker stop shadowsocks 2>/dev/null || true
-docker rm shadowsocks 2>/dev/null || true
-
-# 启动Shadowsocks容器
-echo "🚀 启动Shadowsocks服务..."
-docker run -d \
-    --name shadowsocks \
-    -p $SS_PORT:8388 \
-    -p $SS_PORT:8388/udp \
-    --restart unless-stopped \
-    shadowsocks/shadowsocks-libev:latest \
-    ss-server -s 0.0.0.0 -p 8388 -k "$SS_PASSWORD" -m chacha20-ietf-poly1305 -u
-
-# 等待容器启动
-sleep 5
-
-# 检查容器状态
-if docker ps | grep -q shadowsocks; then
-    echo "✅ Shadowsocks服务启动成功"
-else
-    echo "❌ Shadowsocks服务启动失败"
-    docker logs shadowsocks
-    exit 1
-fi
-
-# 配置防火墙
-echo "🔥 配置防火墙..."
-
-# 停止firewalld
-systemctl stop firewalld 2>/dev/null || true
-systemctl disable firewalld 2>/dev/null || true
-
-# 配置iptables
-iptables -F INPUT 2>/dev/null || true
-iptables -P INPUT ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
-
-# 基础规则
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT -p tcp --dport $SS_PORT -j ACCEPT
-iptables -A INPUT -p udp --dport $SS_PORT -j ACCEPT
-
-# 保存防火墙规则
-iptables-save > /etc/sysconfig/iptables 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-
-echo "✅ 防火墙配置完成"
-
-# 启用BBR
-echo "🚀 启用BBR加速..."
-echo 'net.core.default_qdisc=fq' >> /etc/sysctl.conf
-echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
-
-echo "✅ BBR加速启用完成"
-
-# 获取服务器IP
-SERVER_IP=$(curl -s -4 ifconfig.me --connect-timeout 10 2>/dev/null || curl -s -4 ipinfo.io/ip --connect-timeout 10 2>/dev/null || ip route get 8.8.8.8 | awk '{print $7}' | head -1)
-
-# 生成客户端配置
-cat > ~/shadowsocks_config.json << EOF
-{
-    "server": "$SERVER_IP",
-    "server_port": $SS_PORT,
-    "password": "$SS_PASSWORD",
-    "method": "chacha20-ietf-poly1305",
-    "local_address": "127.0.0.1",
-    "local_port": 1080,
-    "timeout": 300
+    echo ""
+    echo -e "${BLUE}================================${NC}"
+    echo -e "${YELLOW}注意：${NC}"
+    echo -e "1. 此配置实现了入口IP=出口IP功能"
+    echo -e "2. 客户端连接哪个IP，出站流量就从哪个IP发出"
+    echo -e "3. 管理命令：xray (查看管理面板)"
+    echo -e "4. 查看配置：xray info"
+    echo -e "5. 查看日志：xray log"
+    echo ""
 }
-EOF
 
-# 生成SS链接
-SS_CONFIG=$(echo -n "chacha20-ietf-poly1305:$SS_PASSWORD@$SERVER_IP:$SS_PORT" | base64)
-SS_URL="ss://${SS_CONFIG}#Beanfun-Game-Proxy"
+# 主函数
+main() {
+    echo -e "${BLUE}"
+    echo "=================================="
+    echo "   多IP Shadowsocks 一键安装脚本"
+    echo "   入口IP=出口IP 模式"
+    echo "=================================="
+    echo -e "${NC}"
+    
+    check_root
+    get_server_ips
+    
+    # 确认信息
+    echo ""
+    read -p "检测到 ${#SERVER_IPS[@]} 个IP地址，将为前3个IP创建SS配置。是否继续？[y/N]: " confirm
+    
+    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+        log_info "安装已取消"
+        exit 0
+    fi
+    
+    install_xray_script
+    create_shadowsocks_configs
+    modify_config_for_origin
+    restart_services
+    show_config_info
+    
+    log_info "安装完成！"
+}
 
-# 创建管理脚本
-cat > ~/ss_status.sh << 'EOF'
-#!/bin/bash
-echo "=== Shadowsocks状态 ==="
-echo "容器状态: $(docker ps --format 'table {{.Names}}\t{{.Status}}' | grep shadowsocks || echo '未运行')"
-echo "端口监听: $(netstat -tuln | grep :8388 || echo '未监听')"
-SERVER_IP=$(curl -s ifconfig.me)
-if [ -f ~/shadowsocks_config.json ]; then
-    PORT=$(grep server_port ~/shadowsocks_config.json | cut -d: -f2 | tr -d ' ,"')
-    PASSWORD=$(grep password ~/shadowsocks_config.json | cut -d: -f2 | tr -d ' ,"')
-    echo "服务器: $SERVER_IP"
-    echo "端口: $PORT"
-    echo "密码: $PASSWORD"
-fi
-EOF
-
-cat > ~/ss_restart.sh << 'EOF'
-#!/bin/bash
-echo "重启Shadowsocks..."
-docker restart shadowsocks
-sleep 3
-docker ps | grep shadowsocks
-echo "重启完成"
-EOF
-
-chmod +x ~/ss_*.sh
-
-# 测试连接
-echo "🧪 测试连接..."
-sleep 3
-
-if netstat -tuln | grep -q ":$SS_PORT "; then
-    echo "✅ 端口监听正常"
-else
-    echo "❌ 端口监听异常"
-fi
-
-# 显示安装结果
-clear
-echo "================================================"
-echo "🎉 Shadowsocks安装完成！"
-echo "================================================"
-echo ""
-echo "📋 服务器信息:"
-echo "  服务器IP: $SERVER_IP"
-echo "  端口: $SS_PORT"
-echo "  密码: $SS_PASSWORD"
-echo "  加密方式: chacha20-ietf-poly1305"
-echo ""
-echo "🔗 SS链接 (复制到客户端):"
-echo "  $SS_URL"
-echo ""
-echo "📱 客户端下载:"
-echo "  Windows: https://github.com/shadowsocks/shadowsocks-windows/releases"
-echo "  Android: https://github.com/shadowsocks/shadowsocks-android/releases"
-echo "  iOS: 搜索 Shadowrocket"
-echo ""
-echo "🎮 Beanfun游戏设置:"
-echo "  1. 启动Shadowsocks客户端"
-echo "  2. 游戏中设置SOCKS5代理: 127.0.0.1:1080"
-echo "  3. ⚠️ 必须启用'代理DNS查询'选项"
-echo ""
-echo "⚙️ 服务管理:"
-echo "  查看状态: ~/ss_status.sh"
-echo "  重启服务: ~/ss_restart.sh"
-echo "  容器管理: docker restart shadowsocks"
-echo ""
-echo "📁 配置文件: ~/shadowsocks_config.json"
-echo ""
-echo "🧪 连接测试:"
-echo "  1. 安装并启动Shadowsocks客户端"
-echo "  2. 测试命令: curl --socks5 127.0.0.1:1080 https://httpbin.org/ip"
-echo "  3. 测试Beanfun: 打开游戏客户端测试登录"
-echo ""
-echo "💡 重要提醒:"
-echo "  - 确保客户端启用了'代理DNS查询'"
-echo "  - 如果连接失败，检查防火墙设置"
-echo "  - 游戏代理设置为: 127.0.0.1:1080"
-echo ""
-echo "安装时间: $(date)"
-echo "================================================"
-
-# 保存配置信息到文件
-cat > ~/shadowsocks_info.txt << EOF
-Shadowsocks配置信息
-==================
-
-服务器: $SERVER_IP
-端口: $SS_PORT
-密码: $SS_PASSWORD
-加密: chacha20-ietf-poly1305
-
-SS链接: $SS_URL
-
-客户端本地代理: 127.0.0.1:1080
-
-安装时间: $(date)
-EOF
-
-echo ""
-echo "🎊 安装完成！配置信息已保存到 ~/shadowsocks_info.txt"
-echo "🔗 现在请在本地安装Shadowsocks客户端并使用上述配置连接！"
+# 运行主函数
+main "$@"
